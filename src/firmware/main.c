@@ -28,11 +28,6 @@ extern char _doom_copy_size[];  /* Size of .text + .data */
 extern void doom_main(void);
 extern void switch_to_runtime_stack_and_call(void (*entry)(void), void *stack_top);
 
-/* WAD preload address in SDRAM */
-#define WAD_SDRAM_ADDR  0x10C00000
-/* WAD maximum size (bridge offset 0x00C00000 to end of 64MB SDRAM) */
-#define WAD_MAX_SIZE    (52 * 1024 * 1024)
-
 /* Clear BSS section */
 __attribute__((section(".text.boot")))
 static void clear_doom_bss(void) {
@@ -98,44 +93,9 @@ int main(void) {
     }
     term_printf("doom.bin loaded OK\n");
 
-    /* Load WAD header first to determine size, then load the rest */
-    term_printf("Loading WAD header...\n");
-    rc = load_slot(WAD_SLOT_ID, 0, (void *)WAD_SDRAM_ADDR, DMA_CHUNK_SIZE);
-    if (rc < 0) {
-        term_printf("FAILED to load WAD header (rc=%d)\n", rc);
-        while (1) {}
-    }
-
-    /* Parse WAD header: char[4] magic, int32 numlumps, int32 diroffset */
-    volatile unsigned int *wad = (volatile unsigned int *)SDRAM_UNCACHED(WAD_SDRAM_ADDR);
-    unsigned int magic = wad[0];
-    unsigned int numlumps = wad[1];
-    unsigned int diroffset = wad[2];
-    /* Total WAD size = directory offset + numlumps * 16 (each entry is 16 bytes) */
-    unsigned int wad_size = diroffset + numlumps * 16;
-
-    term_printf("WAD: %s numlumps=%d dir@%x size=%d\n",
-                (magic == 0x44415749) ? "IWAD" :
-                (magic == 0x44415750) ? "PWAD" : "BAD!",
-                numlumps, diroffset, wad_size);
-
-    if (magic != 0x44415749 && magic != 0x44415750) {
-        term_printf("FAILED: not a valid WAD file\n");
-        while (1) {}
-    }
-
-    /* Load remaining WAD data (first chunk already loaded) */
-    if (wad_size > DMA_CHUNK_SIZE) {
-        uint32_t remaining = wad_size - DMA_CHUNK_SIZE;
-        term_printf("Loading WAD body (%d bytes)...\n", remaining);
-        rc = load_slot(WAD_SLOT_ID, DMA_CHUNK_SIZE,
-                       (void *)(WAD_SDRAM_ADDR + DMA_CHUNK_SIZE), remaining);
-        if (rc < 0) {
-            term_printf("FAILED to load WAD (rc=%d)\n", rc);
-            while (1) {}
-        }
-    }
-    term_printf("WAD loaded OK\n");
+    /* WAD is loaded on-demand via dataslot_read in libc/file.c.
+     * No preloading needed — Doom's zone allocator caches lumps. */
+    term_printf("WAD: on-demand (slot %d)\n", WAD_SLOT_ID);
 
     /* Flush I-cache (doom.bin loaded via DMA, may have stale cache lines) */
     flush_icache();

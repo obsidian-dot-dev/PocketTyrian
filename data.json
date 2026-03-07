@@ -23,6 +23,17 @@
                 ],
                 "filename": "doom.bin",
                 "deferload": true
+            },
+            {
+                "id": 2,
+                "name": "PWAD (optional mod)",
+                "required": false,
+                "parameters": 0,
+                "extensions": [
+                    "wad"
+                ],
+                "filename": "",
+                "deferload": true
             }
         ]
     }

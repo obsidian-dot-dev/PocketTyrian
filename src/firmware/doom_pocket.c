@@ -101,10 +101,6 @@ void doom_main(void)
            (unsigned)_heap_start, (unsigned)_heap_end,
            (int)(_heap_end - _heap_start));
 
-    /* Verify WAD is readable at preload address */
-    volatile uint32_t *wad = (volatile uint32_t *)0x10C00000;
-    printf("doom_main: WAD @0x10C00000 magic=%x\n", wad[0]);
-
     D_DoomMain();  /* Never returns */
 }
 

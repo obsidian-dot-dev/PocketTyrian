@@ -543,10 +543,13 @@ void IdentifyVersion (void)
 {
     devparm = false;
 
-    // Add WAD file — filename doesn't matter on Pocket, all .wad opens
-    // route to the preloaded WAD in SDRAM via libc/file.c
+    // Add IWAD — first .wad open routes to data slot 0 via libc/file.c
     gamemode = registered;  // preliminary, refined in D_IdentifyGameMode
     D_AddFile ("doom.wad");
+
+    // Add optional PWAD — second .wad open routes to data slot 2.
+    // If slot 2 is empty, open() fails silently and W_AddFile skips it.
+    D_AddFile ("pwad.wad");
 }
 
 //

@@ -12,8 +12,7 @@
  *   - 0x10000000: Framebuffer 0 (320x240, 8-bit indexed)
  *   - 0x10100000: Framebuffer 1 (double buffer)
  *   - 0x10200000: doom.bin code + rodata + data (execute in place from SDRAM)
- *   - After code: BSS + Heap + Stack (to 0x10C00000)
- *   - 0x10C00000: WAD data (preloaded by bridge, up to ~52MB)
+ *   - After code: BSS + Heap + Stack (WAD loaded on-demand via dataslot)
  * - Terminal: 0x20000000 (8KB)   - Character VRAM
  * - SysRegs:  0x40000000         - System control registers
  */
@@ -22,7 +21,7 @@ ENTRY(_start)
 
 MEMORY {
     BRAM      (rwx) : ORIGIN = 0x00000000, LENGTH = 64K
-    SDRAM     (rwx) : ORIGIN = 0x10200000, LENGTH = 10M    /* Doom code + BSS + Heap (to 0x10C00000) */
+    SDRAM     (rwx) : ORIGIN = 0x10200000, LENGTH = 48M    /* Doom code + BSS + Heap (WAD loaded on-demand) */
 }
 
 /* SDRAM layout symbols */
@@ -124,7 +123,7 @@ SECTIONS {
      * Reserve a dedicated runtime stack at top of SDRAM to keep game stack
      * away from BRAM boot code. */
     __heap_start = __doom_bss_end;
-    __runtime_stack_top = 0x10C00000;          /* Just below WAD preload region */
+    __runtime_stack_top = 0x14000000;          /* Near top of 64MB SDRAM */
     __runtime_stack_size = 512K;               /* 512 KB runtime stack */
     __runtime_stack_bottom = __runtime_stack_top - __runtime_stack_size;
     __heap_end = __runtime_stack_bottom;

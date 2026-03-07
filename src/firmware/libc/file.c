@@ -42,12 +42,9 @@ static void free_file(FILE *f) {
     }
 }
 
-/* WAD data slot ID (matches data.json) */
-#define WAD_SLOT_ID      0
-#define WAD_MAX_SIZE     (48 * 1024 * 1024)  /* 48MB max */
-
-/* WAD preloaded address in SDRAM (offset 0x00C00000 in data.json) */
-#define WAD_SDRAM_ADDR   0x10C00000
+/* WAD data slot IDs (match data.json) */
+#define WAD_SLOT_ID      0    /* IWAD (required) */
+#define PWAD_SLOT_ID     2    /* PWAD mod (optional) */
 
 /* Check if string ends with suffix (case-insensitive) */
 static int str_ends_with_ci(const char *str, const char *suffix) {
@@ -57,15 +54,36 @@ static int str_ends_with_ci(const char *str, const char *suffix) {
     return strncasecmp(str + str_len - suf_len, suffix, suf_len) == 0;
 }
 
-/* Map filename to data slot ID, or -2 for preloaded WAD */
+/* Track how many WAD files have been opened (IWAD first, then PWAD) */
+static int wad_open_count = 0;
+
+/* Map filename to data slot ID */
 static int filename_to_slot(const char *pathname) {
-    /* Check for .wad files - preloaded in SDRAM */
     if (str_ends_with_ci(pathname, ".wad")) {
-        return -2;  /* Special: preloaded WAD in SDRAM */
+        /* First .wad open = IWAD (slot 0), second = PWAD (slot 2) */
+        return (wad_open_count == 0) ? WAD_SLOT_ID : PWAD_SLOT_ID;
     }
 
     /* Unknown file */
     return -1;
+}
+
+/* Read WAD header from a data slot to determine file size.
+ * WAD header: char[4] magic, int32 numlumps, int32 diroffset
+ * File size = diroffset + numlumps * 16 */
+static uint32_t wad_get_size(int slot_id) {
+    uint32_t header[3];
+    if (dataslot_read(slot_id, 0, (void *)DMA_BUFFER, 12) != 0)
+        return 0;
+    memcpy(header, SDRAM_UNCACHED(DMA_BUFFER), 12);
+
+    uint32_t magic = header[0];
+    if (magic != 0x44415749 && magic != 0x44415750)  /* IWAD / PWAD */
+        return 0;
+
+    uint32_t numlumps = header[1];
+    uint32_t diroffset = header[2];
+    return diroffset + numlumps * 16;
 }
 
 /* ============================================
@@ -88,20 +106,22 @@ FILE *fopen(const char *pathname, const char *mode) {
     f->slot_id = slot_id;
     f->offset = 0;
     f->flags = 0;
+    f->data = NULL;  /* On-demand: read via dataslot_read */
 
-    if (slot_id == -2) {
-        /* Preloaded WAD file - read directly from SDRAM */
-        f->slot_id = WAD_SLOT_ID;
-        f->data = (void *)WAD_SDRAM_ADDR;
-        f->size = WAD_MAX_SIZE;
+    if (str_ends_with_ci(pathname, ".wad")) {
+        /* Parse WAD header to get real file size */
+        f->size = wad_get_size(slot_id);
+        if (f->size == 0) {
+            free_file(f);
+            return NULL;
+        }
+        wad_open_count++;
     } else {
         /* Get slot size from dataslot system */
         if (dataslot_get_size(slot_id, &f->size) != 0) {
             free_file(f);
             return NULL;
         }
-        /* Data will be loaded into SDRAM on first read or via mmap */
-        f->data = NULL;
     }
 
     return f;
@@ -574,19 +594,24 @@ int open(const char *pathname, int flags, ...) {
     int slot_id = filename_to_slot(pathname);
     printf("[open] '%s' slot=%d\n", pathname, slot_id);
 
-    if (slot_id == -2) {
-        /* Preloaded WAD file - read directly from SDRAM */
-        slot_id = WAD_SLOT_ID;
+    if (str_ends_with_ci(pathname, ".wad")) {
+        /* WAD file — on-demand access via dataslot_read */
         if (fd_used[slot_id]) {
             printf("[open] slot %d already open\n", slot_id);
-            return -1;  /* Already open */
+            return -1;
         }
-        fd_size[slot_id] = WAD_MAX_SIZE;
+        uint32_t size = wad_get_size(slot_id);
+        if (size == 0) {
+            printf("[open] slot %d: no WAD or invalid header\n", slot_id);
+            return -1;
+        }
+        fd_size[slot_id] = size;
         fd_offset[slot_id] = 0;
-        fd_data[slot_id] = (void *)WAD_SDRAM_ADDR;
+        fd_data[slot_id] = NULL;  /* On-demand, not preloaded */
         fd_used[slot_id] = 1;
+        wad_open_count++;
         int fd = SLOT_TO_FD(slot_id);
-        printf("[open] WAD fd=%d data=%x\n", fd, WAD_SDRAM_ADDR);
+        printf("[open] WAD fd=%d slot=%d size=%d\n", fd, slot_id, fd_size[slot_id]);
         return fd;
     }
 

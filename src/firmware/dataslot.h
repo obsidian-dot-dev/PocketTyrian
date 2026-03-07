@@ -58,8 +58,10 @@
 
 /* Shared DMA bounce buffer for dataslot_read callers.
  * After DMA, data must be read through SDRAM_UNCACHED(DMA_BUFFER) to
- * bypass stale D-cache lines, then memcpy'd to the final destination. */
-#define DMA_BUFFER       0x13F00000          /* Fixed SDRAM address for DMA */
+ * bypass stale D-cache lines, then memcpy'd to the final destination.
+ * Placed in the gap between FB1 (ends ~0x10113000) and doom code (0x10200000),
+ * safely outside the heap region used by the zone allocator. */
+#define DMA_BUFFER       0x10180000          /* Fixed SDRAM address for DMA */
 #define DMA_CHUNK_SIZE   (512 * 1024)        /* Max bytes per DMA transfer */
 
 /* Open file parameter structure (256 + 4 + 4 = 264 bytes) */
