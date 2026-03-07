@@ -6,7 +6,7 @@ Doom (1993) running natively on the [Analogue Pocket](https://www.analogue.co/po
 
 1. Copy the contents of the `release/` directory to your Analogue Pocket SD card root
 2. Copy your WAD file to `Assets/pocketdoom/common/` on the SD card
-3. For link cable multiplayer, you **must** use a **GBC link cable** — GBA cables will NOT work
+3. For link cable multiplayer, you **must** use a **GB/GBC link cable** — GBA cables will NOT work
 
 ### Supported WADs
 
@@ -48,7 +48,7 @@ See [Installation Layout](#installation-layout) below for the full SD card direc
 - **48 kHz stereo audio** — Hardware mixing of OPL2 music + SFX, I2S output
 - **Vsync-locked double buffering** — Direct framebuffer rendering with D-cache flush, swap synchronized to 60 Hz vsync
 - **CPU-controlled asset loading** — WAD and doom.bin loaded via deferload (dataslot API) with WAD header parsing to determine file size
-- **2-player link cable multiplayer** — GBC link cable at 256 kHz, full-duplex serial protocol
+- **2-player link cable multiplayer** — GB/GBC link cable at 256 kHz, full-duplex serial protocol
 - **Dock support** — HDMI output when docked
 
 ## Architecture
@@ -189,11 +189,11 @@ Functions are annotated with `PD_FASTTEXT` (defined in `doomdef.h`), placed in t
 
 ## Link Cable Multiplayer
 
-2-player multiplayer over the Analogue Pocket's GBC link cable.
+2-player multiplayer over the Analogue Pocket's GB/GBC link cable.
 
-- **Physical:** GBC cable (crosses SO/SI), GBA cables do NOT work
+- **Physical:** GB/GBC cable (crosses SO/SI), GBA cables do NOT work
 - **Protocol:** Full-duplex serial, 33-bit transfers `{valid, data[31:0]}`, MSB-first
-- **Speed:** 256 kHz SCK (GBC mode)
+- **Speed:** 256 kHz SCK (GB/GBC mode)
 - **Hardware:** TX/RX FIFOs (256 entries each), 3-stage SCK synchronizer for slave mode
 
 ## Boot Flow
