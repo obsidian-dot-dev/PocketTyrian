@@ -68,6 +68,131 @@ static int filename_to_slot(const char *pathname) {
     return -1;
 }
 
+/* ============================================
+ * Save/Config file support (nonvolatile data slots)
+ *
+ * APF nonvolatile data slots auto-load files from SD card into
+ * fixed SDRAM regions at boot.  On save, we write to SDRAM via
+ * the uncached alias, then persist to SD via dataslot_write().
+ *
+ * Layout (match data.json):
+ *   Slots 20-25 = doomsav0.dsg through doomsav5.dsg (128KB each)
+ *   Slot  26    = default.cfg (128KB)
+ *   Bridge base: 0x03C00000 = CPU 0x13C00000
+ * ============================================ */
+
+#define FILE_FLAG_WRITE     1
+
+#define SAV_REGION_BASE     0x13C00000   /* CPU address = bridge 0x03C00000 */
+#define SAV_SLOT_BASE       20           /* APF data slot ID for doomsav0 */
+#define SAV_CFG_SLOT        26           /* APF data slot ID for default.cfg */
+#define SAV_SLOT_SIZE       (128 * 1024) /* 128KB per slot */
+#define SAV_MAX_SLOTS       6            /* doomsav0..doomsav5 */
+#define SAV_HEADER_SIZE     4            /* 4-byte size prefix */
+#define SAV_BUF_SIZE        (SAV_SLOT_SIZE)
+
+/* Single shared buffer for save/config file operations.
+ * Only one save or config file can be open at a time. */
+static char sav_buf[SAV_BUF_SIZE] __attribute__((section(".bss")));
+
+/* Which save/config slot is currently open for writing (-1 = none) */
+static int sav_write_slot_num = -1;  /* 0-5 = save, 6 = config */
+
+/* Return pointer to basename (after last '/') */
+static const char *path_basename(const char *pathname) {
+    const char *last = pathname;
+    while (*pathname) {
+        if (*pathname == '/')
+            last = pathname + 1;
+        pathname++;
+    }
+    return last;
+}
+
+/* Extract Doom save slot number from filename.
+ * "doomsav0.dsg" → 0, "doomsav5.dsg" → 5.  Returns -1 if not a save file. */
+static int sav_slot_from_name(const char *pathname) {
+    const char *base = path_basename(pathname);
+    /* Match "doomsav%d.dsg" */
+    if (strncmp(base, "doomsav", 7) != 0) return -1;
+    char c = base[7];
+    if (c < '0' || c > '5') return -1;
+    if (strcmp(base + 8, ".dsg") != 0) return -1;
+    return c - '0';
+}
+
+/* Check if path is a .dsg save file */
+static int is_save_file(const char *pathname) {
+    return str_ends_with_ci(pathname, ".dsg");
+}
+
+/* Check if path is a config file (.cfg or "doomrc") */
+static int is_cfg_file(const char *pathname) {
+    if (str_ends_with_ci(pathname, ".cfg")) return 1;
+    const char *base = path_basename(pathname);
+    if (strcasecmp(base, "doomrc") == 0) return 1;
+    return 0;
+}
+
+/* Read save/config data from bridge auto-loaded SDRAM into sav_buf.
+ * slot_num: 0-5 for saves, 6 for config.
+ * Returns saved_size on success, 0 on empty/corrupt. */
+static uint32_t sav_read_from_sdram(int slot_num) {
+    uint32_t slot_addr = SAV_REGION_BASE + (uint32_t)slot_num * SAV_SLOT_SIZE;
+    volatile uint32_t *uc = (volatile uint32_t *)SDRAM_UNCACHED(slot_addr);
+    uint32_t saved_size = uc[0];  /* size header */
+    if (saved_size == 0 || saved_size > (SAV_SLOT_SIZE - SAV_HEADER_SIZE))
+        return 0;
+
+    memset(sav_buf, 0, SAV_BUF_SIZE);
+    volatile uint32_t *wsrc = (volatile uint32_t *)SDRAM_UNCACHED(slot_addr + SAV_HEADER_SIZE);
+    uint32_t *wdst = (uint32_t *)sav_buf;
+    uint32_t words = saved_size >> 2;
+    for (uint32_t i = 0; i < words; i++)
+        wdst[i] = wsrc[i];
+    uint32_t tail = saved_size & 3;
+    if (tail) {
+        uint32_t last_word = wsrc[words];
+        uint8_t *bdst = (uint8_t *)sav_buf + (words << 2);
+        for (uint32_t i = 0; i < tail; i++)
+            bdst[i] = (uint8_t)(last_word >> (i * 8));
+    }
+    return saved_size;
+}
+
+/* Write sav_buf to SDRAM save region and persist to SD card.
+ * slot_num: 0-5 for saves, 6 for config.
+ * actual_size: number of bytes of data in sav_buf. */
+static void sav_persist(int slot_num, uint32_t actual_size) {
+    uint32_t slot_addr = SAV_REGION_BASE + (uint32_t)slot_num * SAV_SLOT_SIZE;
+    int ds_slot_id = (slot_num < SAV_MAX_SLOTS)
+                     ? SAV_SLOT_BASE + slot_num
+                     : SAV_CFG_SLOT;
+
+    /* Write size header + data to SDRAM via uncached alias */
+    *(volatile uint32_t *)SDRAM_UNCACHED(slot_addr) = actual_size;
+    {
+        volatile uint32_t *wdst = (volatile uint32_t *)SDRAM_UNCACHED(slot_addr + SAV_HEADER_SIZE);
+        uint32_t *wsrc = (uint32_t *)sav_buf;
+        uint32_t words = actual_size >> 2;
+        for (uint32_t i = 0; i < words; i++)
+            wdst[i] = wsrc[i];
+        uint32_t tail = actual_size & 3;
+        if (tail) {
+            uint32_t last = 0;
+            for (uint32_t i = 0; i < tail; i++)
+                last |= (uint32_t)((uint8_t *)sav_buf)[(words << 2) + i] << (i * 8);
+            wdst[words] = last;
+        }
+    }
+
+    __asm__ volatile("fence");
+
+    /* Persist to SD card via dataslot_write */
+    uint32_t wr_total = SAV_HEADER_SIZE + actual_size;
+    dataslot_write(ds_slot_id, 0, (void *)slot_addr, wr_total);
+}
+
 /* Read WAD header from a data slot to determine file size.
  * WAD header: char[4] magic, int32 numlumps, int32 diroffset
  * File size = diroffset + numlumps * 16 */
@@ -91,8 +216,40 @@ static uint32_t wad_get_size(int slot_id) {
  * ============================================ */
 
 FILE *fopen(const char *pathname, const char *mode) {
-    (void)mode;  /* Only read mode is supported */
+    /* Config file write mode */
+    if (mode[0] == 'w' && is_cfg_file(pathname)) {
+        FILE *f = alloc_file();
+        if (!f) return NULL;
+        sav_write_slot_num = SAV_MAX_SLOTS;  /* 6 = config */
+        memset(sav_buf, 0, SAV_BUF_SIZE);
+        f->slot_id = SAV_CFG_SLOT;
+        f->offset = 0;
+        f->size = SAV_SLOT_SIZE - SAV_HEADER_SIZE;
+        f->flags = FILE_FLAG_WRITE;
+        f->data = sav_buf;
+        return f;
+    }
 
+    /* All other writes not supported via fopen */
+    if (mode[0] == 'w') return NULL;
+
+    /* Config file read mode — from bridge auto-loaded SDRAM */
+    if (is_cfg_file(pathname)) {
+        uint32_t saved_size = sav_read_from_sdram(SAV_MAX_SLOTS);
+        if (saved_size == 0)
+            return NULL;  /* no saved config — use defaults */
+
+        FILE *f = alloc_file();
+        if (!f) return NULL;
+        f->slot_id = SAV_CFG_SLOT;
+        f->offset = 0;
+        f->size = saved_size;
+        f->flags = 0;
+        f->data = sav_buf;
+        return f;
+    }
+
+    /* WAD file read mode */
     int slot_id = filename_to_slot(pathname);
     if (slot_id == -1) {
         return NULL;  /* Unknown file */
@@ -132,7 +289,12 @@ int fclose(FILE *stream) {
         return -1;
     }
 
-    /* Don't free SDRAM data here - mmap/munmap handles that */
+    /* Config/save write-back: persist to SDRAM + SD card */
+    if ((stream->flags & FILE_FLAG_WRITE) && stream->offset > 0 && sav_write_slot_num >= 0) {
+        sav_persist(sav_write_slot_num, stream->offset);
+        sav_write_slot_num = -1;
+    }
+
     free_file(stream);
     return 0;
 }
@@ -180,11 +342,16 @@ size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream) {
 }
 
 size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream) {
-    (void)ptr;
-    (void)size;
-    (void)nmemb;
-    (void)stream;
-    /* Write not supported for data slots */
+    if (stream && (stream->flags & FILE_FLAG_WRITE)) {
+        size_t total = size * nmemb;
+        size_t remaining = stream->size - stream->offset;
+        if (total > remaining) total = remaining;
+        if (total > 0) {
+            memcpy((char *)stream->data + stream->offset, ptr, total);
+            stream->offset += total;
+        }
+        return total / size;
+    }
     return 0;
 }
 
@@ -255,8 +422,19 @@ int ferror(FILE *stream) {
 extern void term_printf(const char *fmt, ...);
 
 int vfprintf(FILE *stream, const char *format, va_list args) {
-    (void)stream;
-    /* Format to a temp buffer and print to terminal */
+    if (stream && (stream->flags & FILE_FLAG_WRITE)) {
+        /* Format into write buffer at current offset */
+        int remaining = (int)(stream->size - stream->offset);
+        if (remaining > 1) {
+            int n = vsnprintf((char *)stream->data + stream->offset, remaining, format, args);
+            if (n > 0) {
+                stream->offset += (n < remaining) ? n : remaining - 1;
+            }
+        }
+        return 0;
+    }
+
+    /* Fallback: format and print to terminal */
     char buf[256];
     int result = vsnprintf(buf, sizeof(buf), format, args);
     extern void term_puts(const char *s);
@@ -588,54 +766,89 @@ static uint32_t fd_size[16] = {0};
 static int fd_used[16] = {0};
 static void *fd_data[16] = {0};  /* Non-NULL = preloaded in SDRAM */
 
-int open(const char *pathname, int flags, ...) {
-    (void)flags;  /* Only O_RDONLY supported */
+/* Save file descriptor tracking.
+ * Separate from WAD fds to avoid array conflicts.
+ * FD range: 100-106 for saves, 107 for config. */
+#define SAV_FD_BASE     100
+#define SAV_FD_CFG      (SAV_FD_BASE + SAV_MAX_SLOTS)
 
+static uint32_t sav_fd_offset = 0;
+static uint32_t sav_fd_size = 0;
+static int      sav_fd_used = 0;
+static int      sav_fd_writing = 0;
+static int      sav_fd_slot_num = -1;  /* 0-5 save, 6 config */
+
+int open(const char *pathname, int flags, ...) {
+    /* Save file (.dsg) handling */
+    if (is_save_file(pathname)) {
+        int slot_num = sav_slot_from_name(pathname);
+        if (slot_num < 0) return -1;
+
+        if (sav_fd_used) return -1;  /* Only one save fd at a time */
+
+        if (flags & O_WRONLY) {
+            /* Write mode: prepare sav_buf for writing */
+            memset(sav_buf, 0, SAV_BUF_SIZE);
+            sav_fd_offset = 0;
+            sav_fd_size = SAV_SLOT_SIZE - SAV_HEADER_SIZE;
+            sav_fd_writing = 1;
+            sav_fd_slot_num = slot_num;
+            sav_write_slot_num = slot_num;
+            sav_fd_used = 1;
+            return SAV_FD_BASE + slot_num;
+        } else {
+            /* Read mode: load from bridge SDRAM region */
+            uint32_t saved_size = sav_read_from_sdram(slot_num);
+            if (saved_size == 0) return -1;  /* Empty slot */
+            sav_fd_offset = 0;
+            sav_fd_size = saved_size;
+            sav_fd_writing = 0;
+            sav_fd_slot_num = slot_num;
+            sav_fd_used = 1;
+            return SAV_FD_BASE + slot_num;
+        }
+    }
+
+    /* WAD file handling */
     int slot_id = filename_to_slot(pathname);
-    printf("[open] '%s' slot=%d\n", pathname, slot_id);
 
     if (str_ends_with_ci(pathname, ".wad")) {
-        /* WAD file — on-demand access via dataslot_read */
-        if (fd_used[slot_id]) {
-            printf("[open] slot %d already open\n", slot_id);
-            return -1;
-        }
+        if (fd_used[slot_id]) return -1;
         uint32_t size = wad_get_size(slot_id);
-        if (size == 0) {
-            printf("[open] slot %d: no WAD or invalid header\n", slot_id);
-            return -1;
-        }
+        if (size == 0) return -1;
         fd_size[slot_id] = size;
         fd_offset[slot_id] = 0;
-        fd_data[slot_id] = NULL;  /* On-demand, not preloaded */
+        fd_data[slot_id] = NULL;
         fd_used[slot_id] = 1;
         wad_open_count++;
-        int fd = SLOT_TO_FD(slot_id);
-        printf("[open] WAD fd=%d slot=%d size=%d\n", fd, slot_id, fd_size[slot_id]);
-        return fd;
+        return SLOT_TO_FD(slot_id);
     }
 
-    if (slot_id < 0 || slot_id >= 16) {
-        printf("[open] unknown file\n");
+    if (slot_id < 0 || slot_id >= 16) return -1;
+    if (fd_used[slot_id]) return -1;
+
+    if (dataslot_get_size(slot_id, &fd_size[slot_id]) != 0)
         return -1;
-    }
-
-    if (fd_used[slot_id]) {
-        return -1;  /* Already open */
-    }
-
-    /* Get size */
-    if (dataslot_get_size(slot_id, &fd_size[slot_id]) != 0) {
-        return -1;
-    }
 
     fd_offset[slot_id] = 0;
     fd_used[slot_id] = 1;
-
     return SLOT_TO_FD(slot_id);
 }
 
 int close(int fd) {
+    /* Save file fd */
+    if (fd >= SAV_FD_BASE && fd <= SAV_FD_CFG && sav_fd_used) {
+        if (sav_fd_writing && sav_fd_offset > 0 && sav_fd_slot_num >= 0) {
+            sav_persist(sav_fd_slot_num, sav_fd_offset);
+            sav_write_slot_num = -1;
+        }
+        sav_fd_used = 0;
+        sav_fd_writing = 0;
+        sav_fd_slot_num = -1;
+        return 0;
+    }
+
+    /* WAD/other fd */
     int slot_id = FD_TO_SLOT(fd);
     if (slot_id < 0 || slot_id >= 16 || !fd_used[slot_id]) {
         return -1;
@@ -647,6 +860,17 @@ int close(int fd) {
 }
 
 ssize_t read(int fd, void *buf, size_t count) {
+    /* Save file read — from sav_buf */
+    if (fd >= SAV_FD_BASE && fd <= SAV_FD_CFG && sav_fd_used && !sav_fd_writing) {
+        uint32_t available = sav_fd_size - sav_fd_offset;
+        if (count > available) count = available;
+        if (count == 0) return 0;
+        memcpy(buf, sav_buf + sav_fd_offset, count);
+        sav_fd_offset += count;
+        return count;
+    }
+
+    /* WAD/other fd */
     int slot_id = FD_TO_SLOT(fd);
     if (slot_id < 0 || slot_id >= 16 || !fd_used[slot_id]) {
         return -1;
@@ -688,6 +912,21 @@ ssize_t read(int fd, void *buf, size_t count) {
 }
 
 off_t lseek(int fd, off_t offset, int whence) {
+    /* Save file seek */
+    if (fd >= SAV_FD_BASE && fd <= SAV_FD_CFG && sav_fd_used) {
+        off_t new_offset;
+        switch (whence) {
+            case SEEK_SET: new_offset = offset; break;
+            case SEEK_CUR: new_offset = sav_fd_offset + offset; break;
+            case SEEK_END: new_offset = sav_fd_size + offset; break;
+            default: return -1;
+        }
+        if (new_offset < 0) return -1;
+        sav_fd_offset = new_offset;
+        return new_offset;
+    }
+
+    /* WAD/other fd */
     int slot_id = FD_TO_SLOT(fd);
     if (slot_id < 0 || slot_id >= 16 || !fd_used[slot_id]) {
         return -1;
@@ -733,9 +972,18 @@ int unlink(const char *pathname) {
 }
 
 ssize_t write(int fd, const void *buf, size_t count) {
-    (void)fd;
+    /* Save file write — to sav_buf */
+    if (fd >= SAV_FD_BASE && fd <= SAV_FD_CFG && sav_fd_used && sav_fd_writing) {
+        uint32_t remaining = sav_fd_size - sav_fd_offset;
+        if (count > remaining) count = remaining;
+        if (count > 0) {
+            memcpy(sav_buf + sav_fd_offset, buf, count);
+            sav_fd_offset += count;
+        }
+        return count;
+    }
+
     /* Write to terminal for stdout/stderr */
-    extern void term_puts(const char *s);
     const char *p = (const char *)buf;
     size_t i;
     for (i = 0; i < count; i++) {
@@ -772,6 +1020,10 @@ int fscanf(FILE *stream, const char *format, ...) {
     while (*f && *s) {
         if (*f == '%') {
             f++;
+            /* Skip optional width specifier (e.g., %79s) */
+            int width = 0;
+            while (isdigit(*f)) { width = width * 10 + (*f - '0'); f++; }
+
             if (*f == 'd' || *f == 'i') {
                 int *ptr = va_arg(args, int *);
                 int val = 0, sign = 1;
@@ -789,11 +1041,31 @@ int fscanf(FILE *stream, const char *format, ...) {
                 f++;
             } else if (*f == 's') {
                 char *ptr = va_arg(args, char *);
+                int maxlen = width > 0 ? width : 255;
+                int n = 0;
                 while (isspace(*s)) s++;
-                while (*s && !isspace(*s)) *ptr++ = *s++;
+                while (*s && !isspace(*s) && n < maxlen) { *ptr++ = *s++; n++; }
                 *ptr = '\0';
                 result++;
                 f++;
+            } else if (*f == '[') {
+                /* Scanset: %[^\n] = read until newline */
+                f++;
+                int negate = 0;
+                if (*f == '^') { negate = 1; f++; }
+                char stop_char = *f;
+                f++;  /* skip the char (e.g., '\n') */
+                if (*f == ']') f++;  /* skip closing ] */
+                char *ptr = va_arg(args, char *);
+                int maxlen = width > 0 ? width : 255;
+                int n = 0;
+                if (negate) {
+                    while (*s && *s != stop_char && n < maxlen) { *ptr++ = *s++; n++; }
+                } else {
+                    while (*s && *s == stop_char && n < maxlen) { *ptr++ = *s++; n++; }
+                }
+                *ptr = '\0';
+                if (n > 0) result++;
             } else {
                 f++;
             }

@@ -234,7 +234,12 @@ void srand(unsigned int seed);
 #define RAND_MAX 0x7FFF
 
 /* POSIX-style file operations */
-#define O_RDONLY 0
+#define O_RDONLY    0x0000
+#define O_WRONLY    0x0001
+#define O_RDWR      0x0002
+#define O_CREAT     0x0040
+#define O_TRUNC     0x0200
+#define O_BINARY    0x0000  /* No-op on this platform */
 
 int open(const char *pathname, int flags, ...);
 int close(int fd);

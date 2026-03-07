@@ -121,12 +121,17 @@ SECTIONS {
 
     /* Heap starts after BSS in SDRAM region.
      * Reserve a dedicated runtime stack at top of SDRAM to keep game stack
-     * away from BRAM boot code. */
+     * away from BRAM boot code.
+     *
+     * Save region: bridge 0x03C00000 = CPU 0x13C00000
+     *   7 × 128KB slots (6 saves + 1 config), auto-loaded by bridge at boot.
+     *   Heap must end before save region to prevent corruption. */
     __heap_start = __doom_bss_end;
+    __save_region = 0x13C00000;                /* 7 × 128KB nonvolatile slots */
     __runtime_stack_top = 0x14000000;          /* Near top of 64MB SDRAM */
     __runtime_stack_size = 512K;               /* 512 KB runtime stack */
     __runtime_stack_bottom = __runtime_stack_top - __runtime_stack_size;
-    __heap_end = __runtime_stack_bottom;
+    __heap_end = __save_region;
 
     /* Stack at end of BRAM (grows downward) */
     __stack_top = ORIGIN(BRAM) + LENGTH(BRAM);

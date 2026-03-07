@@ -34,6 +34,83 @@
                 ],
                 "filename": "",
                 "deferload": true
+            },
+            {
+                "id": 20,
+                "name": "Save 0",
+                "required": false,
+                "parameters": "0x84",
+                "nonvolatile": true,
+                "extensions": ["sav"],
+                "filename": "doomsav0.dsg",
+                "address": "0x03C00000",
+                "size_maximum": "0x00020000"
+            },
+            {
+                "id": 21,
+                "name": "Save 1",
+                "required": false,
+                "parameters": "0x84",
+                "nonvolatile": true,
+                "extensions": ["sav"],
+                "filename": "doomsav1.dsg",
+                "address": "0x03C20000",
+                "size_maximum": "0x00020000"
+            },
+            {
+                "id": 22,
+                "name": "Save 2",
+                "required": false,
+                "parameters": "0x84",
+                "nonvolatile": true,
+                "extensions": ["sav"],
+                "filename": "doomsav2.dsg",
+                "address": "0x03C40000",
+                "size_maximum": "0x00020000"
+            },
+            {
+                "id": 23,
+                "name": "Save 3",
+                "required": false,
+                "parameters": "0x84",
+                "nonvolatile": true,
+                "extensions": ["sav"],
+                "filename": "doomsav3.dsg",
+                "address": "0x03C60000",
+                "size_maximum": "0x00020000"
+            },
+            {
+                "id": 24,
+                "name": "Save 4",
+                "required": false,
+                "parameters": "0x84",
+                "nonvolatile": true,
+                "extensions": ["sav"],
+                "filename": "doomsav4.dsg",
+                "address": "0x03C80000",
+                "size_maximum": "0x00020000"
+            },
+            {
+                "id": 25,
+                "name": "Save 5",
+                "required": false,
+                "parameters": "0x84",
+                "nonvolatile": true,
+                "extensions": ["sav"],
+                "filename": "doomsav5.dsg",
+                "address": "0x03CA0000",
+                "size_maximum": "0x00020000"
+            },
+            {
+                "id": 26,
+                "name": "Config",
+                "required": false,
+                "parameters": "0x84",
+                "nonvolatile": true,
+                "extensions": ["cfg"],
+                "filename": "default.cfg",
+                "address": "0x03CC0000",
+                "size_maximum": "0x00020000"
             }
         ]
     }
