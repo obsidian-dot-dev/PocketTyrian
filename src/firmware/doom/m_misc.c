@@ -184,6 +184,13 @@ extern int      key_use;
 extern int      key_strafe;
 extern int      key_speed;
 
+#ifdef POCKET_DOOM
+extern int      key_l1;
+extern int      key_r1;
+extern int      key_l2;
+extern int      key_r2;
+#endif
+
 extern int      mousebfire;
 extern int      mousebstrafe;
 extern int      mousebforward;
@@ -253,6 +260,13 @@ default_t       defaults[] =
     {"key_use",&key_use, ' '},
     {"key_strafe",&key_strafe, KEY_RALT},
     {"key_speed",&key_speed, KEY_RSHIFT},
+
+#ifdef POCKET_DOOM
+    {"key_l1",&key_l1, ','},
+    {"key_r1",&key_r1, '.'},
+    {"key_l2",&key_l2, KEY_WPNDOWN},
+    {"key_r2",&key_r2, KEY_WPNUP},
+#endif
 
 // UNIX hack, to be removed.
 #ifdef SNDSERV

@@ -30,15 +30,33 @@ See [Installation Layout](#installation-layout) and [Adding Games & Mods](#addin
 | Button | Action |
 |--------|--------|
 | D-pad | Move / navigate menus |
-| Left stick | Move (forward/back/strafe) |
-| A (right face) | Strafe right |
+| A (right face) | Fire |
 | B (bottom face) | Use / open doors |
-| X (top face) | Run |
-| Y (left face) | Strafe left |
-| R1 / R2 / Right trigger | Fire (Enter in menus) |
-| L1 / L2 / Left trigger | Cycle weapon backward (Back/Backspace in menus) |
+| X (top face) | Weapon up (next) |
+| Y (left face) | Weapon down (previous) |
+| L1 | Strafe left |
+| R1 | Strafe right |
+| L2 / Left trigger | Weapon down (previous) |
+| R2 / Right trigger | Weapon up (next) |
 | Start | Menu (ESC) |
 | Select | Automap |
+
+Always-run is enabled by default.
+
+In menus, R1/R2 act as Enter and L1/L2 act as Back.
+
+### Controller Configuration
+
+Shoulder and trigger buttons are configurable via `default.cfg`, placed in `Assets/pocketdoom/common/`. The following keys can be changed:
+
+| Config Key | Default | Description |
+|------------|---------|-------------|
+| `key_l1` | 44 (`,`) | L1 shoulder — strafe left |
+| `key_r1` | 46 (`.`) | R1 shoulder — strafe right |
+| `key_l2` | 241 | L2 / left trigger — weapon down |
+| `key_r2` | 240 | R2 / right trigger — weapon up |
+
+Special key codes: `240` = weapon up (next), `241` = weapon down (previous), `0` = disabled. Standard Doom key codes (e.g. `157` for fire, `32` for use) can also be assigned.
 
 ## Features
 
@@ -267,6 +285,7 @@ SD Card Root/
 |   +-- pocketdoom/
 |       +-- common/
 |       |   +-- doom.bin                 # Doom firmware (always required)
+|       |   +-- default.cfg              # Controller/settings configuration
 |       |   +-- doom/
 |       |   |   +-- DOOM.WAD            # IWAD
 |       |   +-- doom2/
@@ -317,13 +336,17 @@ Each game or mod combination is an **instance JSON** file placed under `Assets/p
             {
                 "id": 1,
                 "filename": "doom.bin"
+            },
+            {
+                "id": 3,
+                "filename": "default.cfg"
             }
         ]
     }
 }
 ```
 
-The `filename` path is relative to `Assets/pocketdoom/common/`. Data slot `0` is the IWAD, slot `1` is the Doom firmware binary.
+The `filename` path is relative to `Assets/pocketdoom/common/`. Data slot `0` is the IWAD, slot `1` is the Doom firmware binary, slot `3` is the configuration file.
 
 ### Adding a PWAD (mod)
 
@@ -352,13 +375,17 @@ To play a mod, copy the PWAD into the same directory as the IWAD it requires, th
             {
                 "id": 2,
                 "filename": "doom2/btsx_e1.wad"
+            },
+            {
+                "id": 3,
+                "filename": "default.cfg"
             }
         ]
     }
 }
 ```
 
-Data slot `2` is the PWAD (optional). You can create multiple instance JSONs that share the same IWAD but load different PWADs.
+Data slot `2` is the PWAD (optional). Slot `3` is the configuration. You can create multiple instance JSONs that share the same IWAD but load different PWADs.
 
 ### Data Slot Reference
 
@@ -367,6 +394,7 @@ Data slot `2` is the PWAD (optional). You can create multiple instance JSONs tha
 | `0`  | IWAD (base game WAD) | Yes |
 | `1`  | Doom firmware (`doom.bin`) | Yes |
 | `2`  | PWAD (mod WAD) | No |
+| `3`  | Configuration (`default.cfg`) | No |
 
 ## Project Structure
 

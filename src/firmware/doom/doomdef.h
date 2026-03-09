@@ -291,6 +291,11 @@ typedef enum
 
 #define KEY_LALT        KEY_RALT
 
+#ifdef POCKET_DOOM
+#define KEY_WPNUP       0xf0
+#define KEY_WPNDOWN     0xf1
+#endif
+
 
 
 // DOOM basic types (boolean),

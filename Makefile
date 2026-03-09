@@ -56,7 +56,7 @@ firmware:
 	@echo "Firmware build complete"
 
 # Package release (uses existing bitstream)
-package: $(REVERSE_BITS) check-bitstream release-dirs copy-bitstream copy-firmware copy-json copy-platform copy-instances copy-icon install-txt
+package: $(REVERSE_BITS) check-bitstream release-dirs copy-bitstream copy-firmware copy-config copy-json copy-platform copy-instances copy-icon install-txt
 	@echo ""
 	@echo "Build complete!"
 	@echo "Release package: $(OUTPUT_DIR)/"
@@ -94,6 +94,11 @@ copy-bitstream: $(REVERSE_BITS)
 copy-firmware:
 	@echo "Copying doom.bin..."
 	cp $(FIRMWARE_SOURCE) $(FIRMWARE_TARGET)
+
+# Copy default config
+copy-config:
+	@echo "Copying default.cfg..."
+	cp dist/common/default.cfg $(RELEASE_ASSETS_DIR)/default.cfg
 
 # Copy JSON configuration files
 copy-json:
@@ -221,4 +226,4 @@ program: firmware-mif
 	@echo "Programming FPGA via JTAG..."
 	$(MAKE) -C $(FPGA_DIR) program
 
-.PHONY: all full fpga firmware-mif firmware firmware-update fw package check-bitstream release-dirs copy-bitstream copy-firmware copy-json copy-platform copy-icon install-txt clean clean-fpga-cache clean-fpga quick program
+.PHONY: all full fpga firmware-mif firmware firmware-update fw package check-bitstream release-dirs copy-bitstream copy-firmware copy-config copy-json copy-platform copy-icon install-txt clean clean-fpga-cache clean-fpga quick program

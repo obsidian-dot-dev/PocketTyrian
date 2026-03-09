@@ -229,23 +229,35 @@ static const struct {
     { PAD_DPAD_DOWN,    KEY_DOWNARROW },
     { PAD_DPAD_LEFT,    KEY_LEFTARROW },
     { PAD_DPAD_RIGHT,   KEY_RIGHTARROW },
-    { PAD_FACE_A,       '.' },          /* Strafe right */
-    { PAD_FACE_B,       ' ' },          /* Use / Open */
-    { PAD_FACE_X,       KEY_RSHIFT },   /* Run */
-    { PAD_FACE_Y,       ',' },          /* Strafe left */
+    { PAD_FACE_A,       KEY_RCTRL },    /* Fire (right) */
+    { PAD_FACE_B,       ' ' },          /* Use / Open (down) */
+    { PAD_FACE_X,       KEY_WPNUP },   /* Weapon up (top) */
+    { PAD_FACE_Y,       KEY_WPNDOWN }, /* Weapon down (left) */
     { PAD_FACE_START,   KEY_ESCAPE },   /* Menu */
     { PAD_FACE_SELECT,  KEY_TAB },      /* Automap */
 };
 
 #define NUM_BUTTONS (sizeof(button_map) / sizeof(button_map[0]))
 
+/* Configurable shoulder/trigger key codes (settable via default.cfg) */
+int key_l1 = ',';    /* L1: strafe left */
+int key_r1 = '.';    /* R1: strafe right */
+int key_l2 = KEY_WPNDOWN;  /* L2: previous weapon */
+int key_r2 = KEY_WPNUP;   /* R2: next weapon */
+
+/* Always-run: inject KEY_RSHIFT on first tic */
+static int always_run_sent = 0;
+
 /* Weapon cycle key posted on previous frame (0 = none) */
 static int weapon_cycle_key = 0;
-/* Virtual button states derived from digital + analog trigger sources */
-static int fire_button_down = 0;
+
+/* Virtual button states for shoulder/trigger buttons */
+static int l1_button_down = 0;
+static int r1_button_down = 0;
+static int l2_button_down = 0;
+static int r2_button_down = 0;
 static int menu_back_down = 0;
 static int menu_enter_down = 0;
-static int weapon_cycle_down = 0;
 
 void I_StartFrame(void)
 {
@@ -257,20 +269,24 @@ void I_StartFrame(void)
 void I_StartTic(void)
 {
     event_t event;
+
+    /* Always-run: hold KEY_RSHIFT permanently */
+    if (!always_run_sent) {
+        event.type = ev_keydown;
+        event.data1 = KEY_RSHIFT;
+        event.data2 = 0;
+        event.data3 = 0;
+        D_PostEvent(&event);
+        always_run_sent = 1;
+    }
+
     uint32_t buttons = SYS_CONT1_KEY;
     uint32_t changed = buttons ^ prev_buttons;
     uint32_t trig = SYS_CONT1_TRIG;
-    int ltrig_down = ((trig & 0xFFu) >= TRIG_PRESS_THRESHOLD);
-    int rtrig_down = (((trig >> 8) & 0xFFu) >= TRIG_PRESS_THRESHOLD);
-    int l1_down = (buttons & PAD_TRIG_L1) != 0;
-    int r1_down = (buttons & PAD_TRIG_R1) != 0;
-    int r2_down = (buttons & PAD_TRIG_R2) != 0;
-    int l2_down = (buttons & PAD_TRIG_L2) != 0;
-    /* R2/right trigger: fire in gameplay, accept in menus. L2/left trigger: weapon cycle in gameplay, back in menus. */
-    int fire_down = (!menuactive && (r2_down || rtrig_down || r1_down));
-    int enter_down = (menuactive && (r2_down || rtrig_down || r1_down));
-    int back_down = (menuactive && (l2_down || ltrig_down || l1_down));
-    int cycle_down = (!menuactive && (l2_down || ltrig_down || l1_down));
+    int cur_l1 = (buttons & PAD_TRIG_L1) != 0;
+    int cur_r1 = (buttons & PAD_TRIG_R1) != 0;
+    int cur_l2 = (buttons & PAD_TRIG_L2) != 0 || ((trig & 0xFFu) >= TRIG_PRESS_THRESHOLD);
+    int cur_r2 = (buttons & PAD_TRIG_R2) != 0 || (((trig >> 8) & 0xFFu) >= TRIG_PRESS_THRESHOLD);
 
     /* Release the synthetic weapon key from last frame */
     if (weapon_cycle_key) {
@@ -285,62 +301,100 @@ void I_StartTic(void)
     for (unsigned i = 0; i < NUM_BUTTONS; i++) {
         uint32_t mask = button_map[i].button;
         if (changed & mask) {
-            event.type = (buttons & mask) ? ev_keydown : ev_keyup;
-            event.data1 = button_map[i].key;
+            int k = button_map[i].key;
+            int pressed = (buttons & mask) != 0;
+            if ((k == KEY_WPNUP || k == KEY_WPNDOWN) && !menuactive) {
+                /* Weapon cycle: synthesize number key on press */
+                if (pressed && !weapon_cycle_key) {
+                    player_t *p = &players[consoleplayer];
+                    int cur = (int)p->readyweapon;
+                    int dir = (k == KEY_WPNUP) ? 1 : -1;
+                    int next;
+                    for (next = cur + dir; next != cur; next += dir) {
+                        if (next >= NUMWEAPONS) next = 0;
+                        if (next < 0) next = NUMWEAPONS - 1;
+                        if (p->weaponowned[next])
+                            break;
+                    }
+                    weapon_cycle_key = '1' + next;
+                    event.type = ev_keydown;
+                    event.data1 = weapon_cycle_key;
+                    event.data2 = 0;
+                    event.data3 = 0;
+                    D_PostEvent(&event);
+                }
+            } else {
+                event.type = pressed ? ev_keydown : ev_keyup;
+                event.data1 = k;
+                event.data2 = 0;
+                event.data3 = 0;
+                D_PostEvent(&event);
+            }
+        }
+    }
+
+    /* In menus: any right shoulder/trigger = enter, any left = back */
+    if (menuactive) {
+        int enter_down = (cur_r1 || cur_r2);
+        if (enter_down != menu_enter_down) {
+            event.type = enter_down ? ev_keydown : ev_keyup;
+            event.data1 = KEY_ENTER;
             event.data2 = 0;
             event.data3 = 0;
             D_PostEvent(&event);
+            menu_enter_down = enter_down;
+        }
+        int back_down = (cur_l1 || cur_l2);
+        if (back_down != menu_back_down) {
+            event.type = back_down ? ev_keydown : ev_keyup;
+            event.data1 = KEY_BACKSPACE;
+            event.data2 = 0;
+            event.data3 = 0;
+            D_PostEvent(&event);
+            menu_back_down = back_down;
+        }
+    } else {
+        /* In gameplay: each button sends its configurable key code */
+        struct { int cur; int *prev; int key; } trigs[] = {
+            { cur_l1, &l1_button_down, key_l1 },
+            { cur_r1, &r1_button_down, key_r1 },
+            { cur_l2, &l2_button_down, key_l2 },
+            { cur_r2, &r2_button_down, key_r2 },
+        };
+        for (int i = 0; i < 4; i++) {
+            if (trigs[i].cur != *trigs[i].prev) {
+                int k = trigs[i].key;
+                if (k == KEY_WPNUP || k == KEY_WPNDOWN) {
+                    /* Weapon cycle: synthesize number key on press */
+                    if (trigs[i].cur && !weapon_cycle_key) {
+                        player_t *p = &players[consoleplayer];
+                        int cur = (int)p->readyweapon;
+                        int dir = (k == KEY_WPNUP) ? 1 : -1;
+                        int next;
+                        for (next = cur + dir; next != cur; next += dir) {
+                            if (next >= NUMWEAPONS) next = 0;
+                            if (next < 0) next = NUMWEAPONS - 1;
+                            if (p->weaponowned[next])
+                                break;
+                        }
+                        weapon_cycle_key = '1' + next;
+                        event.type = ev_keydown;
+                        event.data1 = weapon_cycle_key;
+                        event.data2 = 0;
+                        event.data3 = 0;
+                        D_PostEvent(&event);
+                    }
+                } else if (k != 0) {
+                    event.type = trigs[i].cur ? ev_keydown : ev_keyup;
+                    event.data1 = k;
+                    event.data2 = 0;
+                    event.data3 = 0;
+                    D_PostEvent(&event);
+                }
+            }
+            *trigs[i].prev = trigs[i].cur;
         }
     }
-
-    /* Fire press/release from right shoulder/trigger sources. */
-    if (fire_down != fire_button_down) {
-        event.type = fire_down ? ev_keydown : ev_keyup;
-        event.data1 = KEY_RCTRL;
-        event.data2 = 0;
-        event.data3 = 0;
-        D_PostEvent(&event);
-        fire_button_down = fire_down;
-    }
-
-    /* Menu back press/release from right shoulder only when menu is active. */
-    if (back_down != menu_back_down) {
-        event.type = back_down ? ev_keydown : ev_keyup;
-        event.data1 = KEY_BACKSPACE;
-        event.data2 = 0;
-        event.data3 = 0;
-        D_PostEvent(&event);
-        menu_back_down = back_down;
-    }
-
-    /* Menu enter press/release from left shoulder only when menu is active. */
-    if (enter_down != menu_enter_down) {
-        event.type = enter_down ? ev_keydown : ev_keyup;
-        event.data1 = KEY_ENTER;
-        event.data2 = 0;
-        event.data3 = 0;
-        D_PostEvent(&event);
-        menu_enter_down = enter_down;
-    }
-
-    /* L2 pressed (digital or analog): cycle to next owned weapon */
-    if (cycle_down && !weapon_cycle_down) {
-        player_t *p = &players[consoleplayer];
-        int cur = (int)p->readyweapon;
-        int next;
-        for (next = cur - 1; next != cur; next--) {
-            if (next < 0) next = NUMWEAPONS - 1;
-            if (p->weaponowned[next])
-                break;
-        }
-        weapon_cycle_key = '1' + next;
-        event.type = ev_keydown;
-        event.data1 = weapon_cycle_key;
-        event.data2 = 0;
-        event.data3 = 0;
-        D_PostEvent(&event);
-    }
-    weapon_cycle_down = cycle_down;
 
     prev_buttons = buttons;
 }

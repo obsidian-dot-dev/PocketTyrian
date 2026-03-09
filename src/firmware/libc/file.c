@@ -42,9 +42,11 @@ static void free_file(FILE *f) {
     }
 }
 
-/* WAD data slot IDs (match data.json) */
+/* Data slot IDs (match data.json) */
 #define WAD_SLOT_ID      0    /* IWAD (required) */
 #define PWAD_SLOT_ID     2    /* PWAD mod (optional) */
+#define CFG_SLOT_ID      3    /* default.cfg (read-only) */
+#define CFG_MAX_SIZE     1024 /* Max config file size to load */
 
 /* Check if string ends with suffix (case-insensitive) */
 static int str_ends_with_ci(const char *str, const char *suffix) {
@@ -77,26 +79,25 @@ static int filename_to_slot(const char *pathname) {
  *
  * Layout (match data.json):
  *   Slots 20-25 = doomsav0.dsg through doomsav5.dsg (128KB each)
- *   Slot  26    = default.cfg (128KB)
  *   Bridge base: 0x03C00000 = CPU 0x13C00000
+ *   Config (default.cfg) is read-only from data slot 3.
  * ============================================ */
 
 #define FILE_FLAG_WRITE     1
 
 #define SAV_REGION_BASE     0x13C00000   /* CPU address = bridge 0x03C00000 */
 #define SAV_SLOT_BASE       20           /* APF data slot ID for doomsav0 */
-#define SAV_CFG_SLOT        26           /* APF data slot ID for default.cfg */
 #define SAV_SLOT_SIZE       (128 * 1024) /* 128KB per slot */
 #define SAV_MAX_SLOTS       6            /* doomsav0..doomsav5 */
 #define SAV_HEADER_SIZE     4            /* 4-byte size prefix */
 #define SAV_BUF_SIZE        (SAV_SLOT_SIZE)
 
 /* Single shared buffer for save/config file operations.
- * Only one save or config file can be open at a time. */
+ * Only one save file can be open for writing at a time. */
 static char sav_buf[SAV_BUF_SIZE] __attribute__((section(".bss")));
 
-/* Which save/config slot is currently open for writing (-1 = none) */
-static int sav_write_slot_num = -1;  /* 0-5 = save, 6 = config */
+/* Which save slot is currently open for writing (-1 = none) */
+static int sav_write_slot_num = -1;  /* 0-5 = save */
 
 /* Return pointer to basename (after last '/') */
 static const char *path_basename(const char *pathname) {
@@ -161,13 +162,11 @@ static uint32_t sav_read_from_sdram(int slot_num) {
 }
 
 /* Write sav_buf to SDRAM save region and persist to SD card.
- * slot_num: 0-5 for saves, 6 for config.
+ * slot_num: 0-5 for saves.
  * actual_size: number of bytes of data in sav_buf. */
 static void sav_persist(int slot_num, uint32_t actual_size) {
     uint32_t slot_addr = SAV_REGION_BASE + (uint32_t)slot_num * SAV_SLOT_SIZE;
-    int ds_slot_id = (slot_num < SAV_MAX_SLOTS)
-                     ? SAV_SLOT_BASE + slot_num
-                     : SAV_CFG_SLOT;
+    int ds_slot_id = SAV_SLOT_BASE + slot_num;
 
     /* Write size header + data to SDRAM via uncached alias */
     *(volatile uint32_t *)SDRAM_UNCACHED(slot_addr) = actual_size;
@@ -216,38 +215,35 @@ static uint32_t wad_get_size(int slot_id) {
  * ============================================ */
 
 FILE *fopen(const char *pathname, const char *mode) {
-    /* Config file write mode */
-    if (mode[0] == 'w' && is_cfg_file(pathname)) {
+    /* Config file: read-only from data slot */
+    if (is_cfg_file(pathname)) {
+        if (mode[0] == 'w') return NULL;  /* read-only */
+
+        /* Load config into sav_buf via DMA */
+        memset(sav_buf, 0, CFG_MAX_SIZE);
+        if (dataslot_read(CFG_SLOT_ID, 0, (void *)DMA_BUFFER, CFG_MAX_SIZE) != 0)
+            return NULL;  /* slot unavailable — use compiled defaults */
+        memcpy(sav_buf, SDRAM_UNCACHED(DMA_BUFFER), CFG_MAX_SIZE);
+
+        /* Trim trailing NULs to find actual content end */
+        uint32_t cfg_size = CFG_MAX_SIZE;
+        while (cfg_size > 0 && sav_buf[cfg_size - 1] == '\0')
+            cfg_size--;
+
+        if (cfg_size == 0) return NULL;
+
         FILE *f = alloc_file();
         if (!f) return NULL;
-        sav_write_slot_num = SAV_MAX_SLOTS;  /* 6 = config */
-        memset(sav_buf, 0, SAV_BUF_SIZE);
-        f->slot_id = SAV_CFG_SLOT;
+        f->slot_id = CFG_SLOT_ID;
         f->offset = 0;
-        f->size = SAV_SLOT_SIZE - SAV_HEADER_SIZE;
-        f->flags = FILE_FLAG_WRITE;
+        f->size = cfg_size;
+        f->flags = 0;
         f->data = sav_buf;
         return f;
     }
 
     /* All other writes not supported via fopen */
     if (mode[0] == 'w') return NULL;
-
-    /* Config file read mode — from bridge auto-loaded SDRAM */
-    if (is_cfg_file(pathname)) {
-        uint32_t saved_size = sav_read_from_sdram(SAV_MAX_SLOTS);
-        if (saved_size == 0)
-            return NULL;  /* no saved config — use defaults */
-
-        FILE *f = alloc_file();
-        if (!f) return NULL;
-        f->slot_id = SAV_CFG_SLOT;
-        f->offset = 0;
-        f->size = saved_size;
-        f->flags = 0;
-        f->data = sav_buf;
-        return f;
-    }
 
     /* WAD file read mode */
     int slot_id = filename_to_slot(pathname);

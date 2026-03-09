@@ -17,6 +17,10 @@
             {
                 "id": 2,
                 "filename": "tnt/TNT31.WAD"
+            },
+            {
+                "id": 3,
+                "filename": "default.cfg"
             }
         ]
     }
