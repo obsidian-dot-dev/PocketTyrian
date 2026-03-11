@@ -217,8 +217,10 @@ void D_Display (void)
     // save the current screen if about to wipe
     if (gamestate != wipegamestate)
     {
-        wipe = true;
-        wipe_StartScreen(0, 0, SCREENWIDTH, SCREENHEIGHT);
+        /* Skip wipe — the melt effect writes incrementally and is
+           incompatible with double-buffered framebuffers (only every
+           other frame would be updated, causing heavy flicker). */
+        wipe = false;
     }
     else
         wipe = false;
@@ -560,30 +562,15 @@ void IdentifyVersion (void)
 void D_IdentifyGameMode (void)
 {
     if (W_CheckNumForName("MAP01") >= 0)
-    {
         gamemode = commercial;
-        printf("D_IdentifyGameMode: Doom II (commercial)\n");
-    }
     else if (W_CheckNumForName("E4M1") >= 0)
-    {
         gamemode = retail;
-        printf("D_IdentifyGameMode: The Ultimate Doom (retail)\n");
-    }
     else if (W_CheckNumForName("E3M1") >= 0)
-    {
         gamemode = registered;
-        printf("D_IdentifyGameMode: Doom (registered)\n");
-    }
     else if (W_CheckNumForName("E1M1") >= 0)
-    {
         gamemode = shareware;
-        printf("D_IdentifyGameMode: Doom (shareware)\n");
-    }
     else
-    {
         gamemode = indetermined;
-        printf("D_IdentifyGameMode: unknown WAD\n");
-    }
 }
 
 

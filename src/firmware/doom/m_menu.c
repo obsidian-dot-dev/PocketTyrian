@@ -641,6 +641,15 @@ void M_DoSave(int slot)
 //
 void M_SaveSelect(int choice)
 {
+#ifdef POCKET_DOOM
+    /* No keyboard — auto-generate a name from the current level. */
+    saveSlot = choice;
+    if (gamemode == commercial)
+        sprintf(savegamestrings[choice], "MAP%02d", gamemap);
+    else
+        sprintf(savegamestrings[choice], "E%dM%d", gameepisode, gamemap);
+    M_DoSave(choice);
+#else
     // we are going to be intercepting all chars
     saveStringEnter = 1;
 
@@ -649,6 +658,7 @@ void M_SaveSelect(int choice)
     if (!strcmp(savegamestrings[choice],EMPTYSTRING))
         savegamestrings[choice][0] = 0;
     saveCharIndex = strlen(savegamestrings[choice]);
+#endif
 }
 
 //

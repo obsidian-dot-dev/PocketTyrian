@@ -17,6 +17,30 @@
             {
                 "id": 3,
                 "filename": "default.cfg"
+            },
+            {
+                "id": 20,
+                "filename": "doom_sav0.dsg"
+            },
+            {
+                "id": 21,
+                "filename": "doom_sav1.dsg"
+            },
+            {
+                "id": 22,
+                "filename": "doom_sav2.dsg"
+            },
+            {
+                "id": 23,
+                "filename": "doom_sav3.dsg"
+            },
+            {
+                "id": 24,
+                "filename": "doom_sav4.dsg"
+            },
+            {
+                "id": 25,
+                "filename": "doom_sav5.dsg"
             }
         ]
     }

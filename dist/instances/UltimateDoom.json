@@ -17,6 +17,30 @@
             {
                 "id": 3,
                 "filename": "default.cfg"
+            },
+            {
+                "id": 20,
+                "filename": "doomu_sav0.dsg"
+            },
+            {
+                "id": 21,
+                "filename": "doomu_sav1.dsg"
+            },
+            {
+                "id": 22,
+                "filename": "doomu_sav2.dsg"
+            },
+            {
+                "id": 23,
+                "filename": "doomu_sav3.dsg"
+            },
+            {
+                "id": 24,
+                "filename": "doomu_sav4.dsg"
+            },
+            {
+                "id": 25,
+                "filename": "doomu_sav5.dsg"
             }
         ]
     }

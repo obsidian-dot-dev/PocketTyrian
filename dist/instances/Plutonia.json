@@ -17,6 +17,30 @@
             {
                 "id": 3,
                 "filename": "default.cfg"
+            },
+            {
+                "id": 20,
+                "filename": "plutonia_sav0.dsg"
+            },
+            {
+                "id": 21,
+                "filename": "plutonia_sav1.dsg"
+            },
+            {
+                "id": 22,
+                "filename": "plutonia_sav2.dsg"
+            },
+            {
+                "id": 23,
+                "filename": "plutonia_sav3.dsg"
+            },
+            {
+                "id": 24,
+                "filename": "plutonia_sav4.dsg"
+            },
+            {
+                "id": 25,
+                "filename": "plutonia_sav5.dsg"
             }
         ]
     }

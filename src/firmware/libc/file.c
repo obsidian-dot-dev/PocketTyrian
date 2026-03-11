@@ -59,6 +59,14 @@ static int str_ends_with_ci(const char *str, const char *suffix) {
 /* Track how many WAD files have been opened (IWAD first, then PWAD) */
 static int wad_open_count = 0;
 
+/* IWAD file size — unique per game, used to tag saves per-instance.
+ * Set when the IWAD is first opened. */
+static uint32_t iwad_fingerprint = 0;
+
+/* Game tag written right after save data (8 bytes).
+ * Layout: [4-byte magic "PD\x01\x00"] [4-byte iwad_fingerprint] */
+#define SAV_TAG_MAGIC   0x00014450  /* "PD\x01\x00" */
+
 /* Map filename to data slot ID */
 static int filename_to_slot(const char *pathname) {
     if (str_ends_with_ci(pathname, ".wad")) {
@@ -145,6 +153,16 @@ static uint32_t sav_read_from_sdram(int slot_num) {
     if (saved_size == 0 || saved_size > (SAV_SLOT_SIZE - SAV_HEADER_SIZE))
         return 0;
 
+    /* Check game tag — right after save data (4-byte aligned).
+     * Skip saves from a different game/instance.
+     * Untagged saves (from older firmware) have no magic and are accepted. */
+    uint32_t tag_off = (SAV_HEADER_SIZE + saved_size + 3) & ~3u;
+    if (tag_off + 8 <= SAV_SLOT_SIZE) {
+        volatile uint32_t *tag = (volatile uint32_t *)SDRAM_UNCACHED(slot_addr + tag_off);
+        if (tag[0] == SAV_TAG_MAGIC && tag[1] != iwad_fingerprint)
+            return 0;
+    }
+
     memset(sav_buf, 0, SAV_BUF_SIZE);
     volatile uint32_t *wsrc = (volatile uint32_t *)SDRAM_UNCACHED(slot_addr + SAV_HEADER_SIZE);
     uint32_t *wdst = (uint32_t *)sav_buf;
@@ -185,11 +203,18 @@ static void sav_persist(int slot_num, uint32_t actual_size) {
         }
     }
 
+    /* Write game tag right after save data so saves are per-instance.
+     * Round up to 4-byte alignment for the uint32_t writes. */
+    uint32_t tag_off = (SAV_HEADER_SIZE + actual_size + 3) & ~3u;
+    volatile uint32_t *tag = (volatile uint32_t *)SDRAM_UNCACHED(slot_addr + tag_off);
+    tag[0] = SAV_TAG_MAGIC;
+    tag[1] = iwad_fingerprint;
+
     __asm__ volatile("fence");
 
-    /* Persist to SD card via dataslot_write */
-    uint32_t wr_total = SAV_HEADER_SIZE + actual_size;
-    dataslot_write(ds_slot_id, 0, (void *)slot_addr, wr_total);
+    /* Persist header + data + tag to SD card (no stale padding) */
+    uint32_t write_size = tag_off + 8;
+    dataslot_write(ds_slot_id, 0, (void *)slot_addr, write_size);
 }
 
 /* Read WAD header from a data slot to determine file size.
@@ -268,6 +293,9 @@ FILE *fopen(const char *pathname, const char *mode) {
             free_file(f);
             return NULL;
         }
+        /* Capture IWAD size as game fingerprint (first WAD opened) */
+        if (wad_open_count == 0)
+            iwad_fingerprint = f->size;
         wad_open_count++;
     } else {
         /* Get slot size from dataslot system */
@@ -815,6 +843,9 @@ int open(const char *pathname, int flags, ...) {
         fd_size[slot_id] = size;
         fd_offset[slot_id] = 0;
         fd_data[slot_id] = NULL;
+        /* Capture IWAD size as game fingerprint (first WAD opened) */
+        if (wad_open_count == 0)
+            iwad_fingerprint = size;
         fd_used[slot_id] = 1;
         wad_open_count++;
         return SLOT_TO_FD(slot_id);
