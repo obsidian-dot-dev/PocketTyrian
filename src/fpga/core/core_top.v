@@ -1166,10 +1166,32 @@ assign cpu_psram_rdata_valid = psram_mux_rdata_valid;
         end
     end
 
-    wire    [9:0]   datatable_addr = 0;
+    reg     [9:0]   datatable_addr;
     wire    [31:0]  datatable_q;
-    wire            datatable_wren = 0;
-    wire    [31:0]  datatable_data = 0;
+    reg             datatable_wren;
+    reg     [31:0]  datatable_data;
+
+// Write save slot size to datatable after all data slots are loaded.
+// The bridge reads datatable entry (slot_id * 2 + 1) at shutdown
+// to know how many bytes to read back from SDRAM and save to SD card.
+// Slot 10: entry index = 10 * 2 + 1 = 21, size = 256KB.
+reg dt_init_done;
+always @(posedge clk_74a or negedge reset_n_apf) begin
+    if (~reset_n_apf) begin
+        datatable_addr <= 0;
+        datatable_data <= 0;
+        datatable_wren <= 0;
+        dt_init_done   <= 0;
+    end else begin
+        datatable_wren <= 0;
+        if (dataslot_allcomplete && !dt_init_done) begin
+            datatable_addr <= 10'd21;           // slot 10 * 2 + 1
+            datatable_data <= 32'h00040000;     // 256KB
+            datatable_wren <= 1;
+            dt_init_done   <= 1;
+        end
+    end
+end
 
 core_bridge_cmd icb (
 

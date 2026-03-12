@@ -55,9 +55,11 @@
                 "id": 10,
                 "name": "Saves",
                 "required": false,
-                "parameters": 0,
+                "parameters": "0x04",
+                "nonvolatile": true,
                 "extensions": ["sav"],
-                "deferload": true
+                "address": "0x03C00000",
+                "size_maximum": "0x00040000"
             }
         ]
     }

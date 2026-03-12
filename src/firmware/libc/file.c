@@ -77,28 +77,30 @@ static int filename_to_slot(const char *pathname) {
 }
 
 /* ============================================
- * Save/Config file support (deferload data slot)
+ * Save/Config file support (nonvolatile SDRAM region)
  *
- * Single deferload data slot (10) per instance — the instance JSON
- * sets the save filename (e.g. Doom.sav, Doom2.sav).  Reads and
- * writes go to SD card on demand via dataslot_read / dataslot_write
- * through the DMA bounce buffer.
+ * Save data lives in a fixed SDRAM region at 0x13C00000 (256KB).
+ * The APF bridge auto-loads this from SD card at boot and auto-saves
+ * it back on shutdown.  The firmware can also trigger a mid-game
+ * flush via the bridge target command register.
  *
- * Layout within the save file:
+ * Layout within the 256KB save region:
  *   6 sub-saves at 40KB (0xA000) offsets, 4-byte size header each.
- *   Total file size = 6 * 0xA000 = 240KB.
+ *   Total used = 6 * 0xA000 = 240KB (+ 16KB padding).
  *
- * Config (default.cfg) is read-only from data slot 3.
+ * Config (default.cfg) is read-only from deferload data slot 3.
  * ============================================ */
 
 #define FILE_FLAG_WRITE     1
 
-#define SAV_SLOT_ID         10           /* APF data slot ID for saves */
 #define SAV_SUB_COUNT       6            /* Sub-saves per file */
 #define SAV_SUB_SIZE        0xA000       /* 40KB per sub-save */
 #define SAV_HEADER_SIZE     4            /* 4-byte size prefix per sub-save */
 #define SAV_BUF_SIZE        (SAV_SUB_SIZE)
-#define SAV_FILE_SIZE       (SAV_SUB_COUNT * SAV_SUB_SIZE)
+
+/* Save region in SDRAM — matches data.json address + 0x10000000 */
+#define SAV_REGION_ADDR     0x13C00000
+#define SAV_REGION_UC       ((volatile uint8_t *)SDRAM_UNCACHED(SAV_REGION_ADDR))
 
 /* Single shared buffer for save/config file operations.
  * Only one save file can be open for writing at a time. */
@@ -106,13 +108,6 @@ static char sav_buf[SAV_BUF_SIZE] __attribute__((section(".bss")));
 
 /* Which sub-save is currently open for writing (-1 = none) */
 static int sav_write_sub_idx = -1;   /* 0-5 = sub-save index */
-
-/* Write-through cache of save descriptions.  Populated on save so that
- * M_ReadSaveStrings can display correct slot names even when
- * dataslot_read cannot re-read the file in the same session. */
-#define SAVE_DESC_SIZE  24
-static char     sav_desc_cache[SAV_SUB_COUNT][SAVE_DESC_SIZE];
-static uint32_t sav_size_cache[SAV_SUB_COUNT];  /* 0 = not cached */
 
 /* Return pointer to basename (after last '/') */
 static const char *path_basename(const char *pathname) {
@@ -152,54 +147,25 @@ static int is_cfg_file(const char *pathname) {
 
 static void flush_dcache(void);
 
-/* Read sub-save data from SD card into sav_buf via deferload.
+/* Read sub-save data from nonvolatile SDRAM region into sav_buf.
  * sub_idx: sub-save index (0-5).
  * Returns saved_size on success, 0 on empty/corrupt. */
 static uint32_t sav_read_from_slot(int sub_idx) {
-    extern void term_printf(const char *fmt, ...);
     uint32_t sub_offset = (uint32_t)sub_idx * SAV_SUB_SIZE;
+    volatile uint32_t *uc = (volatile uint32_t *)(SAV_REGION_UC + sub_offset);
 
-    /* Flush D-cache before DMA so stale dirty lines at DMA_BUFFER
-     * can't be evicted later and overwrite bridge-DMA'd data. */
-    flush_dcache();
-
-    /* DMA the sub-save region from SD into bounce buffer */
-    int rc = dataslot_read(SAV_SLOT_ID, sub_offset, (void *)DMA_BUFFER, SAV_SUB_SIZE);
-
-    if (rc != 0) {
-        /* SD read failed — use cached description if we saved this session */
-        if (sav_size_cache[sub_idx] > 0) {
-            memset(sav_buf, 0, SAV_BUF_SIZE);
-            memcpy(sav_buf, sav_desc_cache[sub_idx], SAVE_DESC_SIZE);
-            return sav_size_cache[sub_idx];
-        }
-        return 0;
-    }
-
-    /* Read size header via uncached alias.
-     * The bridge DMA introduces a 4-byte offset: file data appears
-     * shifted by one word in SDRAM.  Size header is at word 1, save
-     * data starts at word 2 (offset 8). */
-    volatile uint32_t *uc = (volatile uint32_t *)SDRAM_UNCACHED(DMA_BUFFER);
-    uint32_t saved_size = uc[1];   /* word 1 (offset 4) */
+    /* Read size header from SDRAM via uncached alias */
+    uint32_t saved_size = uc[0];
     if (saved_size == 0 || saved_size == 0xFFFFFFFF ||
         saved_size > (SAV_SUB_SIZE - SAV_HEADER_SIZE))
         return 0;
 
-    /* Copy data (after shifted header) to sav_buf */
+    /* Copy data (after header) to sav_buf */
     memset(sav_buf, 0, SAV_BUF_SIZE);
-    volatile uint32_t *wsrc = (volatile uint32_t *)SDRAM_UNCACHED(DMA_BUFFER + SAV_HEADER_SIZE + 4);
-    uint32_t *wdst = (uint32_t *)sav_buf;
-    uint32_t words = saved_size >> 2;
-    for (uint32_t i = 0; i < words; i++)
-        wdst[i] = wsrc[i];
-    uint32_t tail = saved_size & 3;
-    if (tail) {
-        uint32_t last_word = wsrc[words];
-        uint8_t *bdst = (uint8_t *)sav_buf + (words << 2);
-        for (uint32_t i = 0; i < tail; i++)
-            bdst[i] = (uint8_t)(last_word >> (i * 8));
-    }
+    volatile uint8_t *src = SAV_REGION_UC + sub_offset + SAV_HEADER_SIZE;
+    for (uint32_t i = 0; i < saved_size; i++)
+        ((uint8_t *)sav_buf)[i] = src[i];
+
     return saved_size;
 }
 
@@ -215,73 +181,22 @@ static void flush_dcache(void) {
     (void)sink;
 }
 
-/* Write sav_buf to SD card via DMA bounce buffer.
+/* Write sav_buf to nonvolatile SDRAM region.
  * sub_idx: sub-save index (0-5).
  * actual_size: number of bytes of data in sav_buf. */
 static void sav_persist(int sub_idx, uint32_t actual_size) {
-    uint32_t total = SAV_HEADER_SIZE + actual_size;
-    if (total > SAV_SUB_SIZE) total = SAV_SUB_SIZE;
+    uint32_t sub_offset = (uint32_t)sub_idx * SAV_SUB_SIZE;
 
-    /* Build header + data in sav_buf */
-    memmove(sav_buf + SAV_HEADER_SIZE, sav_buf, actual_size);
-    *(uint32_t *)sav_buf = actual_size;
+    /* Write size header + data to save region via uncached alias */
+    volatile uint32_t *hdr = (volatile uint32_t *)(SAV_REGION_UC + sub_offset);
+    hdr[0] = actual_size;
 
+    volatile uint8_t *dst = SAV_REGION_UC + sub_offset + SAV_HEADER_SIZE;
+    for (uint32_t i = 0; i < actual_size; i++)
+        dst[i] = ((uint8_t *)sav_buf)[i];
+
+    /* Flush D-cache so bridge reads clean SDRAM data */
     flush_dcache();
-
-    /* Build a complete file image in the second half of DMA_BUFFER.
-     * The bridge cannot do sparse writes to auto-created files — data
-     * always lands at file offset 0 regardless of the offset we pass.
-     * So we write the full 240KB file every time, with all 6 sub-saves
-     * at their correct positions.
-     *
-     * Layout: DMA reads go into DMA_BUFFER[0..SAV_SUB_SIZE-1] (first half).
-     *         The output image is built at DMA_BUFFER[SAV_FILE_SIZE..2*SAV_FILE_SIZE-1].
-     *         These regions don't overlap (40KB < 240KB). */
-    volatile uint32_t *img = (volatile uint32_t *)SDRAM_UNCACHED(DMA_BUFFER + SAV_FILE_SIZE);
-
-    /* Zero the entire output image */
-    for (uint32_t i = 0; i < SAV_FILE_SIZE / 4; i++)
-        img[i] = 0;
-
-    /* Place the slot being saved from sav_buf */
-    {
-        uint32_t base_word = ((uint32_t)sub_idx * SAV_SUB_SIZE) / 4;
-        uint32_t *wsrc = (uint32_t *)sav_buf;
-        uint32_t words = (total + 3) >> 2;
-        for (uint32_t i = 0; i < words; i++)
-            img[base_word + i] = wsrc[i];
-    }
-
-    /* Read other existing slots from the file and place them in the image */
-    for (int s = 0; s < SAV_SUB_COUNT; s++) {
-        if (s == sub_idx) continue;
-
-        uint32_t slot_off = (uint32_t)s * SAV_SUB_SIZE;
-        flush_dcache();
-        int rc = dataslot_read(SAV_SLOT_ID, slot_off, (void *)DMA_BUFFER, SAV_SUB_SIZE);
-        if (rc != 0) continue;
-
-        volatile uint32_t *uc = (volatile uint32_t *)SDRAM_UNCACHED(DMA_BUFFER);
-        uint32_t saved_size = uc[1];   /* +4 byte bridge read offset */
-        if (saved_size == 0 || saved_size == 0xFFFFFFFF ||
-            saved_size > (SAV_SUB_SIZE - SAV_HEADER_SIZE))
-            continue;
-
-        /* Reconstruct: size header at img[base], data at img[base+1..] */
-        uint32_t base_word = slot_off / 4;
-        img[base_word] = saved_size;
-        uint32_t data_words = (saved_size + 3) >> 2;
-        for (uint32_t i = 0; i < data_words; i++)
-            img[base_word + 1 + i] = uc[2 + i];  /* data from DMA_BUFFER+8 */
-    }
-
-    __asm__ volatile("fence");
-
-    /* Write the complete file image from offset 0 */
-    dataslot_write(SAV_SLOT_ID, 0, (void *)(DMA_BUFFER + SAV_FILE_SIZE), SAV_FILE_SIZE);
-
-    /* Restore sav_buf (shift data back, remove header) */
-    memmove(sav_buf, sav_buf + SAV_HEADER_SIZE, actual_size);
 }
 
 /* Read WAD header from a data slot to determine file size.
@@ -312,6 +227,7 @@ FILE *fopen(const char *pathname, const char *mode) {
     if (is_cfg_file(pathname)) {
         if (mode[0] == 'w') return NULL;  /* read-only */
         memset(sav_buf, 0, CFG_MAX_SIZE);
+        flush_dcache();  /* Evict dirty D-cache lines before DMA */
         uint32_t cfg_size = 0;
         uint32_t chunk = 512;
         while (cfg_size < CFG_MAX_SIZE) {
@@ -930,9 +846,6 @@ int close(int fd) {
     /* Save file fd */
     if (fd >= SAV_FD_BASE && fd <= SAV_FD_CFG && sav_fd_used) {
         if (sav_fd_writing && sav_fd_offset > 0 && sav_fd_sub_idx >= 0) {
-            /* Cache description before persist (sav_buf has the data) */
-            memcpy(sav_desc_cache[sav_fd_sub_idx], sav_buf, SAVE_DESC_SIZE);
-            sav_size_cache[sav_fd_sub_idx] = sav_fd_offset;
             sav_persist(sav_fd_sub_idx, sav_fd_offset);
             sav_write_sub_idx = -1;
         }
