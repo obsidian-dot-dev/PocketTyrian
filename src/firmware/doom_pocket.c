@@ -121,7 +121,7 @@ void I_InitGraphics(void)
     /* Point screens[0] at the current draw framebuffer (cached SDRAM).
      * Doom will render directly into it — no memcpy needed in I_FinishUpdate. */
     uint32_t draw_reg = SYS_FB_DRAW;
-    screens[0] = (byte *)FB_REG_TO_CPU(draw_reg) + (20 * FB_STRIDE); //Center vertically
+    screens[0] = (byte *)FB_REG_TO_CPU(draw_reg) + FB_VOFFSET;
 
     /* Switch to framebuffer display mode */
     SYS_DISPLAY_MODE = 1;
