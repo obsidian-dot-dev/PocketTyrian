@@ -193,7 +193,9 @@ set_instrument(int ch, const genmidi_voice_t *v)
 static void
 set_volume(int ch, int velocity)
 {
+    /* Scale velocity by music_volume (0-127) so the menu slider works */
     int vol = volume_curve[velocity & 0x7F];
+    vol = (vol * music_volume) / 127;
 
     /* Carrier: scale "loudness" portion by velocity */
     int car_tl = 0x3F - ((0x3F - voices[ch].car_level) * vol) / 128;
@@ -522,6 +524,13 @@ I_SetMusicVolume(int volume)
     snd_MusicVolume = volume;
     music_volume = volume * 127 / 15;
     if (music_volume > 127) music_volume = 127;
+
+    /* Re-apply volume to all active OPL voices so the slider takes
+     * effect immediately, not just on the next note-on. */
+    for (int i = 0; i < NUM_OPL_VOICES; i++) {
+        if (voices[i].active)
+            set_volume(i, mus_chan_volume[voices[i].mus_channel]);
+    }
 }
 
 int

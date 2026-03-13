@@ -99,8 +99,20 @@ end
 // Data format: 32 bits per channel (16 data + 16 dummy), MSB first
 // LRCK toggles every 32 SCLK cycles
 
-wire signed [15:0] sfx_l = fifo_empty ? 16'sh0 : $signed(fifo_l);
-wire signed [15:0] sfx_r = fifo_empty ? 16'sh0 : $signed(fifo_r);
+// Hold last valid sample on FIFO underrun to avoid clicks/pops.
+// Dropping to silence (0) causes a hard discontinuity = audible pop.
+reg signed [15:0] hold_l = 16'sh0;
+reg signed [15:0] hold_r = 16'sh0;
+
+always @(posedge clk_audio) begin
+    if (audio_pop && !fifo_empty) begin
+        hold_l <= $signed(fifo_l);
+        hold_r <= $signed(fifo_r);
+    end
+end
+
+wire signed [15:0] sfx_l = fifo_empty ? hold_l : $signed(fifo_l);
+wire signed [15:0] sfx_r = fifo_empty ? hold_r : $signed(fifo_r);
 
 // CDC: double-register OPL audio from clk_sys into clk_audio domain
 // Safe: OPL value changes at ~50 kHz vs 12.288 MHz clock
@@ -110,17 +122,29 @@ always @(posedge clk_audio) begin
     opl_sync2 <= opl_sync1;
 end
 
-// Saturating 17-bit add: OPL2 mono mixed into both L and R channels
-wire signed [16:0] mix_l = {sfx_l[15], sfx_l} + {opl_sync2[15], opl_sync2};
-wire signed [16:0] mix_r = {sfx_r[15], sfx_r} + {opl_sync2[15], opl_sync2};
+// Mix SFX + OPL into both L and R channels.
+wire signed [15:0] opl_scaled = opl_sync2;
+wire signed [16:0] mix_l = {sfx_l[15], sfx_l} + {opl_scaled[15], opl_scaled};
+wire signed [16:0] mix_r = {sfx_r[15], sfx_r} + {opl_scaled[15], opl_scaled};
 
 // Clamp to 16-bit signed
-wire [15:0] active_l = (mix_l > 17'sd32767)  ? 16'h7FFF :
-                        (mix_l < -17'sd32768) ? 16'h8000 :
-                        mix_l[15:0];
-wire [15:0] active_r = (mix_r > 17'sd32767)  ? 16'h7FFF :
-                        (mix_r < -17'sd32768) ? 16'h8000 :
-                        mix_r[15:0];
+wire [15:0] mix_clamp_l = (mix_l > 17'sd32767)  ? 16'h7FFF :
+                           (mix_l < -17'sd32768) ? 16'h8000 :
+                           mix_l[15:0];
+wire [15:0] mix_clamp_r = (mix_r > 17'sd32767)  ? 16'h7FFF :
+                           (mix_r < -17'sd32768) ? 16'h8000 :
+                           mix_r[15:0];
+
+// Latch mixed output on audio_pop (48 kHz) so the I2S serializer
+// always reads a stable value — eliminates race with FIFO read timing.
+reg [15:0] active_l = 16'h0;
+reg [15:0] active_r = 16'h0;
+always @(posedge clk_audio) begin
+    if (audio_pop) begin
+        active_l <= mix_clamp_l;
+        active_r <= mix_clamp_r;
+    end
+end
 
 reg [31:0] audgen_sampshift;
 reg [4:0]  audgen_lrck_cnt;

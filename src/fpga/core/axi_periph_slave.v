@@ -100,7 +100,14 @@ module axi_periph_slave (
     output reg         opl_write_req,
     output reg         opl_write_addr,
     output reg  [7:0]  opl_write_data,
-    input wire         opl_ack
+    input wire         opl_ack,
+
+    // Game ID from instance JSON memory_writes
+    input wire  [31:0] game_id,
+
+    // Shutdown handshake
+    input wire         shutdown_pending,
+    output reg         shutdown_ack
 );
 
 wire reset = ~reset_n;
@@ -273,6 +280,7 @@ always @(posedge clk) begin
         target_dataslot_length <= 0;
         target_buffer_param_struct <= 0;
         target_buffer_resp_struct <= 0;
+        shutdown_ack <= 0;
     end else begin
         cycle_counter <= cycle_counter + 1;
         pal_wr <= 0;
@@ -314,6 +322,7 @@ always @(posedge clk) begin
                         endcase
                     end
                 end
+                6'b011011: shutdown_ack <= req_wdata[0];
                 6'b010000: pal_index_reg <= req_wdata[7:0];
                 6'b010001: begin
                     pal_wr <= 1;
@@ -360,6 +369,9 @@ always @(*) begin
         6'b010111: sysreg_rdata = cont2_key_s;
         6'b011000: sysreg_rdata = cont2_joy_s;
         6'b011001: sysreg_rdata = {16'b0, cont2_trig_s};
+        6'b011010: sysreg_rdata = game_id;
+        6'b011011: sysreg_rdata = {31'b0, shutdown_pending};
+        6'b011100: sysreg_rdata = 32'h0;
         default: sysreg_rdata = 32'h0;
     endcase
 end

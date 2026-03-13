@@ -55,7 +55,10 @@ module axi_psram_slave (
     output reg  [3:0]  psram_wstrb,
     input  wire [31:0] psram_rdata,
     input  wire        psram_busy,
-    input  wire        psram_rdata_valid
+    input  wire        psram_rdata_valid,
+
+    // Bank select: 0 = CRAM0 (0x30-0x37), 1 = CRAM1 (0x38-0x3F)
+    output wire        psram_bank
 );
 
 wire reset = ~reset_n;
@@ -80,6 +83,10 @@ reg        psram_started;   // busy was seen after issuing command
 reg [7:0]  issue_wait;      // Timeout counter for missed commands
 
 wire beat_is_last = (beat_count == burst_len);
+
+// Bank select: always CRAM1 (bank 1) for CPU PSRAM access.
+// CPU accesses CRAM1 at 0x30xxxxxx; CRAM0 is only used by video scanout.
+assign psram_bank = 1'b1;
 
 always @(posedge clk or posedge reset) begin
     if (reset) begin

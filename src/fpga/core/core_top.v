@@ -210,6 +210,14 @@ assign bridge_endian_little = 1;
 reg [31:0] analogizer_settings;
 //wire [31:0] analogizer_settings_s;
 
+// Game ID from instance JSON memory_writes (bridge 0xF7000010)
+reg [31:0] game_id_74a;
+reg [31:0] game_id_sync1, game_id_sync2;
+always @(posedge clk_cpu) begin
+    game_id_sync1 <= game_id_74a;
+    game_id_sync2 <= game_id_sync1;
+end
+
 reg       analogizer_ena;
 reg [3:0] analogizer_video_type;
 reg [4:0] snac_game_cont_type /* synthesis keep */;
@@ -509,18 +517,50 @@ psram_controller #(
     .cram_lb_n(cram0_lb_n)
 );
 
-// CRAM1 unused
-assign cram1_a     = 6'd0;
-assign cram1_dq    = 16'hZZZZ;
-assign cram1_clk   = 1'b0;
-assign cram1_adv_n = 1'b1;
-assign cram1_cre   = 1'b0;
-assign cram1_ce0_n = 1'b1;
-assign cram1_ce1_n = 1'b1;
-assign cram1_oe_n  = 1'b1;
-assign cram1_we_n  = 1'b1;
-assign cram1_ub_n  = 1'b1;
-assign cram1_lb_n  = 1'b1;
+// PSRAM Controller for CRAM1 (16MB, used for save data — uncached)
+wire        psram1_rd;
+wire        psram1_wr;
+wire [21:0] psram1_addr;
+wire [31:0] psram1_wdata;
+wire [3:0]  psram1_wstrb;
+wire [31:0] psram1_rdata;
+wire        psram1_busy;
+wire        psram1_rdata_valid;
+
+// PSRAM1 must NOT use core reset_n: the bridge loads nonvolatile save data
+// BEFORE Reset Exit (while reset_n=0).  Use PLL lock instead so PSRAM1
+// is ready to accept writes during the entire boot DMA phase.
+reg [2:0] pll_ram_locked_sync;
+always @(posedge clk_ram_controller)
+    pll_ram_locked_sync <= {pll_ram_locked_sync[1:0], pll_ram_locked};
+wire psram1_reset_n = pll_ram_locked_sync[2];
+
+psram_controller #(
+    .CLOCK_SPEED(100.0)
+) psram1 (
+    .clk(clk_ram_controller),
+    .reset_n(psram1_reset_n),
+    .word_rd(psram1_rd),
+    .word_wr(psram1_wr),
+    .word_addr(psram1_addr),
+    .word_data(psram1_wdata),
+    .word_wstrb(psram1_wstrb),
+    .word_q(psram1_rdata),
+    .word_busy(psram1_busy),
+    .word_q_valid(psram1_rdata_valid),
+    .cram_a(cram1_a),
+    .cram_dq(cram1_dq),
+    .cram_wait(cram1_wait),
+    .cram_clk(cram1_clk),
+    .cram_adv_n(cram1_adv_n),
+    .cram_cre(cram1_cre),
+    .cram_ce0_n(cram1_ce0_n),
+    .cram_ce1_n(cram1_ce1_n),
+    .cram_oe_n(cram1_oe_n),
+    .cram_we_n(cram1_we_n),
+    .cram_ub_n(cram1_ub_n),
+    .cram_lb_n(cram1_lb_n)
+);
 
 // SRAM unused
 assign sram_dq   = 16'hZZZZ;
@@ -611,6 +651,7 @@ wire [3:0]  cpu_psram_wstrb;
 wire [31:0] cpu_psram_rdata;
 wire        cpu_psram_busy;
 wire        cpu_psram_rdata_valid;
+wire        cpu_psram_bank;  // 0 = CRAM0, 1 = CRAM1
 
 // Muxed PSRAM signals (bridge or CPU)
 wire        psram_mux_rd;
@@ -720,7 +761,10 @@ always @(*) begin
             bridge_rd_data <= 0;
         end
         32'b000000xx_xxxxxxxx_xxxxxxxx_xxxxxxxx: begin
-            bridge_rd_data <= bridge_rd_data_captured;
+                bridge_rd_data <= bridge_rd_data_captured;
+        end
+        32'h30xxxxxx: begin
+                bridge_rd_data <= cram1_rd_resp_data;
         end
 
         32'hF7000000: begin 
@@ -759,9 +803,15 @@ always @(posedge clk_74a) begin
         bridge_wr_data[31:24]};
 
         32'hF7000008: signed_voff <= {
-        bridge_wr_data[7:0], 
-        bridge_wr_data[15:8], 
-        bridge_wr_data[23:16], 
+        bridge_wr_data[7:0],
+        bridge_wr_data[15:8],
+        bridge_wr_data[23:16],
+        bridge_wr_data[31:24]};
+
+        32'hF7000010: game_id_74a <= {
+        bridge_wr_data[7:0],
+        bridge_wr_data[15:8],
+        bridge_wr_data[23:16],
         bridge_wr_data[31:24]};
         endcase
     end
@@ -924,42 +974,58 @@ always @(posedge clk_ram_controller) begin
     end
 end
 
-// Bridge SDRAM read and PSRAM write handshake CDC
+// Bridge SDRAM read and CRAM0 write handshake CDC (unchanged)
 reg [31:0] bridge_addr_captured;
 reg [31:0] bridge_wr_data_captured;
 reg bridge_sdram_rd;
-reg bridge_psram_wr;
+reg bridge_psram_wr;      // CRAM0 write (single-word handshake, low throughput OK)
 reg [31:0] bridge_addr_ram_clk;
 reg bridge_rd_done;
 reg bridge_rd_done_sync1, bridge_rd_done_sync2;
 reg [31:0] bridge_rd_data_captured;
+
+// CRAM1 read: request FIFO (clk_74a→ram_controller) + register response
+// The drain FSM reads PSRAM and writes bridge_rd_data_captured directly.
+// The APF host is slow enough (~1.6µs per word over SPI) that the drain FSM
+// always completes before the next bridge_rd.
+wire        cram1_rd_req_fifo_full;
 
 always @(posedge clk_74a) begin
     bridge_rd_done_sync1 <= bridge_rd_done;
     bridge_rd_done_sync2 <= bridge_rd_done_sync1;
     bridge_psram_wr_done_sync1 <= bridge_psram_wr_done;
     bridge_psram_wr_done_sync2 <= bridge_psram_wr_done_sync1;
-
     if (bridge_rd_done_sync2) bridge_sdram_rd <= 0;
     if (bridge_psram_wr_done_sync2) bridge_psram_wr <= 0;
 
+    // CRAM0 write (bridge address 0x20xxxxxx) — single-word handshake
     if (!bridge_psram_wr && bridge_wr && bridge_addr[31:24] == 8'h20) begin
         bridge_psram_wr <= 1;
         bridge_addr_captured <= bridge_addr;
         bridge_wr_data_captured <= bridge_wr_data;
     end
 
-    if (!bridge_sdram_rd && bridge_rd) begin
-        casex(bridge_addr[31:24])
-        8'b000000xx: begin
-            bridge_sdram_rd <= 1;
-            bridge_addr_captured <= bridge_addr;
-        end
-        endcase
+    // SDRAM read (0x00-0x03) — single-word handshake
+    if (!bridge_sdram_rd && bridge_rd && bridge_addr[31:26] == 6'b000000) begin
+        bridge_sdram_rd <= 1;
+        bridge_addr_captured <= bridge_addr;
     end
 end
 
-// 4-stage synchronizer for bridge reads and PSRAM writes
+// CRAM1 read request FIFO: push on RISING EDGE of bridge_rd for 0x30xxxxxx.
+// Level-sensitive push would fire every clk_74a cycle while bridge_rd is HIGH,
+// flooding the request FIFO with duplicates and causing stale responses to
+// pollute subsequent sequential reads during save readback.
+reg prev_bridge_rd_for_cram1;
+always @(posedge clk_74a)
+    prev_bridge_rd_for_cram1 <= bridge_rd;
+
+wire cram1_rd_req_push = ~prev_bridge_rd_for_cram1 && bridge_rd
+                        && (bridge_addr[31:24] == 8'h30)
+                        && !cram1_rd_req_fifo_full;
+wire [21:0] cram1_rd_req_data = bridge_addr[23:2]; // 22-bit word address
+
+// 4-stage synchronizer for SDRAM reads and CRAM0 writes
 reg bridge_rd_sync1, bridge_rd_sync2, bridge_rd_sync3, bridge_rd_sync4;
 reg bridge_psram_wr_sync1, bridge_psram_wr_sync2, bridge_psram_wr_sync3, bridge_psram_wr_sync4;
 reg bridge_psram_wr_done, bridge_psram_wr_done_sync1, bridge_psram_wr_done_sync2;
@@ -980,6 +1046,7 @@ always @(posedge clk_ram_controller) begin
     bridge_psram_wr_sync3 <= bridge_psram_wr_sync2;
     bridge_psram_wr_sync4 <= bridge_psram_wr_sync3;
 
+    // Capture address/data on rising edge of bridge request
     if ((bridge_rd_sync2 && !bridge_rd_sync3) ||
         (bridge_psram_wr_sync2 && !bridge_psram_wr_sync3)) begin
         bridge_addr_sync1 <= bridge_addr_captured;
@@ -999,16 +1066,19 @@ always @(posedge clk_ram_controller) begin
         bridge_psram_wr_data_ram_clk <= bridge_wr_data_sync2;
     end
 
-    if (bridge_axi_rd_done) begin
-        bridge_rd_data_captured <= bridge_axi_rd_data;
+    // SDRAM read complete → capture data
+    if (bridge_direct_rd_complete) begin
+        bridge_rd_data_captured <= bridge_direct_rd_data;
         bridge_rd_done <= 1;
     end
     if (!bridge_rd_sync1) begin
         bridge_rd_done <= 0;
     end
+
+    // (CRAM1 reads now use response FIFO — see below)
 end
 
-// Bridge PSRAM write active signal
+// Bridge CRAM0 write active signal (single-word handshake)
 wire bridge_psram_wr_active = bridge_psram_wr_sync3 | bridge_psram_wr_sync4 | bridge_psram_wr_done | bridge_psram_write_pending;
 
 reg bridge_psram_write_pending;
@@ -1031,16 +1101,265 @@ always @(posedge clk_ram_controller) begin
     if (!bridge_psram_wr_sync1) bridge_psram_wr_done <= 0;
 end
 
-// PSRAM mux: Bridge writes have priority, CPU access when bridge idle
-assign psram_mux_rd = bridge_psram_wr_active ? 1'b0 : cpu_psram_rd;
-assign psram_mux_wr = bridge_psram_write_pending ? 1'b1 : cpu_psram_wr;
+// ============================================================
+// Bridge CRAM1 Write Path: dcfifo (clk_74a -> clk_ram_controller)
+// Mirrors the SDRAM write FIFO pattern for bulk nonvolatile loads.
+// ============================================================
+wire bridge_cram1_wr_detect = bridge_wr && (bridge_addr[31:24] == 8'h30);
+
+// Skid buffer (4-entry) in clk_74a domain
+localparam integer CRAM1_WR_SKID_DEPTH = 4;
+reg [55:0] cram1_wr_skid_data [0:CRAM1_WR_SKID_DEPTH-1];
+reg [1:0]  cram1_wr_skid_wrptr;
+reg [1:0]  cram1_wr_skid_rdptr;
+reg [2:0]  cram1_wr_skid_count;
+wire       cram1_wr_skid_empty = (cram1_wr_skid_count == 0);
+wire       cram1_wr_skid_nonempty_74a = !cram1_wr_skid_empty;
+wire       cram1_wr_skid_pop = !cram1_wr_skid_empty && !cram1_wr_fifo_full;
+wire [55:0] cram1_wr_skid_head =
+            (cram1_wr_skid_rdptr == 2'd0) ? cram1_wr_skid_data[0] :
+            (cram1_wr_skid_rdptr == 2'd1) ? cram1_wr_skid_data[1] :
+            (cram1_wr_skid_rdptr == 2'd2) ? cram1_wr_skid_data[2] :
+                                             cram1_wr_skid_data[3];
+wire       cram1_wr_skid_push = bridge_cram1_wr_detect;
+wire       cram1_wr_skid_has_space = (cram1_wr_skid_count != 3'd4);
+wire       cram1_wr_skid_push_ok = cram1_wr_skid_push &&
+                                   (cram1_wr_skid_has_space || cram1_wr_skid_pop);
+
+wire       cram1_wr_fifo_full;
+wire       cram1_wr_fifo_empty;
+wire [55:0] cram1_wr_fifo_q;
+
+// No reset_n_apf gate: the bridge writes save data BEFORE reset exit,
+// so the skid buffer must accept writes even while the core is in reset.
+always @(posedge clk_74a) begin
+    if (cram1_wr_skid_pop)
+        cram1_wr_skid_rdptr <= cram1_wr_skid_rdptr + 2'd1;
+
+    if (cram1_wr_skid_push_ok) begin
+        case (cram1_wr_skid_wrptr)
+            2'd0: cram1_wr_skid_data[0] <= {bridge_addr[23:2], 2'b00, bridge_wr_data[31:0]};
+            2'd1: cram1_wr_skid_data[1] <= {bridge_addr[23:2], 2'b00, bridge_wr_data[31:0]};
+            2'd2: cram1_wr_skid_data[2] <= {bridge_addr[23:2], 2'b00, bridge_wr_data[31:0]};
+            default: cram1_wr_skid_data[3] <= {bridge_addr[23:2], 2'b00, bridge_wr_data[31:0]};
+        endcase
+        cram1_wr_skid_wrptr <= cram1_wr_skid_wrptr + 2'd1;
+    end
+
+    case ({cram1_wr_skid_push_ok, cram1_wr_skid_pop})
+        2'b10: cram1_wr_skid_count <= cram1_wr_skid_count + 3'd1;
+        2'b01: cram1_wr_skid_count <= cram1_wr_skid_count - 3'd1;
+        default: ;
+    endcase
+end
+
+// Async FIFO: clk_74a → clk_ram_controller (512 entries, 56-bit: 24-bit addr + 32-bit data)
+wire cram1_wr_fifo_drain;
+
+dcfifo cram1_wr_fifo (
+    .wrclk   (clk_74a),
+    .wrreq   (cram1_wr_skid_pop),
+    .data    (cram1_wr_skid_head),
+    .wrfull  (cram1_wr_fifo_full),
+    .rdclk   (clk_ram_controller),
+    .rdreq   (cram1_wr_fifo_drain),
+    .q       (cram1_wr_fifo_q),
+    .rdempty (cram1_wr_fifo_empty),
+    .aclr    (1'b0),
+    .wrusedw (), .wrempty (), .rdfull (), .rdusedw ()
+);
+defparam cram1_wr_fifo.intended_device_family = "Cyclone V",
+    cram1_wr_fifo.lpm_numwords  = 512,
+    cram1_wr_fifo.lpm_showahead = "ON",
+    cram1_wr_fifo.lpm_type      = "dcfifo",
+    cram1_wr_fifo.lpm_width     = 56,
+    cram1_wr_fifo.lpm_widthu    = 9,
+    cram1_wr_fifo.overflow_checking  = "ON",
+    cram1_wr_fifo.underflow_checking = "ON",
+    cram1_wr_fifo.rdsync_delaypipe   = 5,
+    cram1_wr_fifo.wrsync_delaypipe   = 5,
+    cram1_wr_fifo.use_eab       = "ON";
+
+// Synchronize skid-queue nonempty flag into RAM clock domain
+reg [2:0] cram1_wr_skid_nonempty_sync;
+always @(posedge clk_ram_controller) begin
+    cram1_wr_skid_nonempty_sync <= {cram1_wr_skid_nonempty_sync[1:0], cram1_wr_skid_nonempty_74a};
+end
+wire cram1_wr_skid_nonempty = cram1_wr_skid_nonempty_sync[2];
+
+// CRAM1 write drain FSM: pop from FIFO, write to psram1, wait for completion.
+// Follows the same pattern as the CRAM0 bridge write handshake:
+//   pending=1 → drive wr, wait for busy high → started=1 → wait for busy low → done
+reg        cram1_wr_pending;
+reg        cram1_wr_started;
+reg [21:0] cram1_wr_addr_r;
+reg [31:0] cram1_wr_data_r;
+
+assign cram1_wr_fifo_drain = !cram1_wr_fifo_empty && !cram1_wr_pending;
+
+always @(posedge clk_ram_controller) begin
+    if (!cram1_wr_pending) begin
+        // Pop next entry from FIFO
+        if (!cram1_wr_fifo_empty) begin
+            cram1_wr_addr_r <= cram1_wr_fifo_q[55:34];
+            cram1_wr_data_r <= cram1_wr_fifo_q[31:0];
+            cram1_wr_pending <= 1;
+            cram1_wr_started <= 0;
+        end
+    end else begin
+        // Drive wr=1 until psram1 accepts (busy goes high)
+        if (!cram1_wr_started && psram1_busy) begin
+            cram1_wr_started <= 1;
+        end else if (cram1_wr_started && !psram1_busy) begin
+            // Write complete
+            cram1_wr_pending <= 0;
+            cram1_wr_started <= 0;
+        end
+    end
+end
+
+wire cram1_bridge_wr_active = cram1_wr_pending | !cram1_wr_fifo_empty | cram1_wr_skid_nonempty;
+
+// ============================================================
+// Bridge CRAM1 Read Path: FIFO-based (no CDC race)
+// Request FIFO (clk_74a → clk_ram_controller): 22-bit word addresses
+// Response FIFO (clk_ram_controller → clk_74a): 32-bit data words
+// Bridge reads response FIFO head (showahead); each bridge_rd pops it.
+// ============================================================
+
+// Request FIFO: clk_74a write side, clk_ram_controller read side
+wire        cram1_rd_req_fifo_empty;
+wire [21:0] cram1_rd_req_fifo_q;
+wire        cram1_rd_req_drain;
+
+dcfifo cram1_rd_req_fifo (
+    .wrclk   (clk_74a),
+    .wrreq   (cram1_rd_req_push),
+    .data    (cram1_rd_req_data),
+    .wrfull  (cram1_rd_req_fifo_full),
+    .rdclk   (clk_ram_controller),
+    .rdreq   (cram1_rd_req_drain),
+    .q       (cram1_rd_req_fifo_q),
+    .rdempty (cram1_rd_req_fifo_empty),
+    .aclr    (1'b0)
+);
+defparam cram1_rd_req_fifo.intended_device_family = "Cyclone V",
+    cram1_rd_req_fifo.lpm_numwords  = 64,
+    cram1_rd_req_fifo.lpm_showahead = "ON",
+    cram1_rd_req_fifo.lpm_type      = "dcfifo",
+    cram1_rd_req_fifo.lpm_width     = 22,
+    cram1_rd_req_fifo.lpm_widthu    = 6,
+    cram1_rd_req_fifo.overflow_checking  = "ON",
+    cram1_rd_req_fifo.underflow_checking = "ON",
+    cram1_rd_req_fifo.rdsync_delaypipe   = 5,
+    cram1_rd_req_fifo.wrsync_delaypipe   = 5,
+    cram1_rd_req_fifo.use_eab       = "ON";
+
+// Read drain FSM: pop address from request FIFO, read PSRAM, push result
+// to response FIFO (clk_ram_controller → clk_74a).
+reg        cram1_rd_pending;
+reg        cram1_rd_started;
+reg [21:0] cram1_rd_addr_r;
+reg        cram1_rd_resp_push;  // push pulse for response FIFO
+reg [31:0] cram1_rd_resp_wdata; // data to push
+
+assign cram1_rd_req_drain = !cram1_rd_req_fifo_empty && !cram1_rd_pending;
+
+always @(posedge clk_ram_controller) begin
+    cram1_rd_resp_push <= 0;
+
+    if (!cram1_rd_pending) begin
+        if (!cram1_rd_req_fifo_empty) begin
+            cram1_rd_addr_r <= cram1_rd_req_fifo_q;
+            cram1_rd_pending <= 1;
+            cram1_rd_started <= 0;
+        end
+    end else begin
+        if (!cram1_rd_started && psram1_busy)
+            cram1_rd_started <= 1;
+        if (psram1_rdata_valid) begin
+            cram1_rd_resp_wdata <= psram1_rdata;
+            cram1_rd_resp_push <= 1;
+            cram1_rd_pending <= 0;
+            cram1_rd_started <= 0;
+        end
+    end
+end
+
+// Response FIFO: clk_ram_controller → clk_74a (32-bit data words)
+wire        cram1_rd_resp_empty;
+wire [31:0] cram1_rd_resp_q;
+reg         cram1_rd_resp_pop;
+
+dcfifo cram1_rd_resp_fifo (
+    .wrclk   (clk_ram_controller),
+    .wrreq   (cram1_rd_resp_push),
+    .data    (cram1_rd_resp_wdata),
+    .rdclk   (clk_74a),
+    .rdreq   (cram1_rd_resp_pop),
+    .q       (cram1_rd_resp_q),
+    .rdempty (cram1_rd_resp_empty),
+    .aclr    (1'b0),
+    .wrfull  (), .wrempty (), .rdfull (), .rdusedw (), .wrusedw ()
+);
+defparam cram1_rd_resp_fifo.intended_device_family = "Cyclone V",
+    cram1_rd_resp_fifo.lpm_numwords  = 4,
+    cram1_rd_resp_fifo.lpm_showahead = "ON",
+    cram1_rd_resp_fifo.lpm_type      = "dcfifo",
+    cram1_rd_resp_fifo.lpm_width     = 32,
+    cram1_rd_resp_fifo.lpm_widthu    = 2,
+    cram1_rd_resp_fifo.overflow_checking  = "ON",
+    cram1_rd_resp_fifo.underflow_checking = "ON",
+    cram1_rd_resp_fifo.rdsync_delaypipe   = 5,
+    cram1_rd_resp_fifo.wrsync_delaypipe   = 5,
+    cram1_rd_resp_fifo.use_eab       = "OFF";
+
+// APF side: pop response FIFO when data arrives, latch into bridge_rd_data
+reg [31:0] cram1_rd_resp_data;
+always @(posedge clk_74a) begin
+    cram1_rd_resp_pop <= 0;
+    if (!cram1_rd_resp_empty && !cram1_rd_resp_pop) begin
+        cram1_rd_resp_pop <= 1;
+    end
+    if (cram1_rd_resp_pop) begin
+        cram1_rd_resp_data <= cram1_rd_resp_q;
+    end
+end
+
+wire bridge_cram1_rd_active_flag = cram1_rd_pending | !cram1_rd_req_fifo_empty;
+
+// Combined CRAM1 bridge activity (write FIFO draining or read in progress)
+wire bridge_cram1_active = cram1_bridge_wr_active | bridge_cram1_rd_active_flag;
+
+// ============================================================
+// PSRAM mux: Bank 0 (CRAM0) with bridge write priority,
+//            Bank 1 (CRAM1) with bridge FIFO write / read priority
+// ============================================================
+wire cpu_on_bank0 = (cpu_psram_bank == 1'b0);
+
+// CRAM0 mux: bridge writes have priority, CPU when idle and on bank 0
+assign psram_mux_rd = (bridge_psram_wr_active || !cpu_on_bank0) ? 1'b0 : cpu_psram_rd;
+assign psram_mux_wr = bridge_psram_write_pending ? 1'b1 : (cpu_on_bank0 ? cpu_psram_wr : 1'b0);
 assign psram_mux_addr = bridge_psram_write_pending ? bridge_psram_addr_ram_clk[23:2] : cpu_psram_addr;
 assign psram_mux_wdata = bridge_psram_write_pending ? bridge_psram_wr_data_ram_clk : cpu_psram_wdata;
 assign psram_mux_wstrb = bridge_psram_write_pending ? 4'b1111 : cpu_psram_wstrb;
 
-assign cpu_psram_rdata = psram_mux_rdata;
-assign cpu_psram_busy = bridge_psram_wr_active | psram_mux_busy;
-assign cpu_psram_rdata_valid = psram_mux_rdata_valid;
+// CRAM1 mux: bridge write FIFO drain and read FIFO drain have priority over CPU
+assign psram1_rd = (cram1_rd_pending && !cram1_wr_pending) ? 1'b1 :
+                   (bridge_cram1_active || cpu_on_bank0) ? 1'b0 : cpu_psram_rd;
+assign psram1_wr = cram1_wr_pending ? 1'b1 :
+                   (bridge_cram1_active || cpu_on_bank0) ? 1'b0 : cpu_psram_wr;
+assign psram1_addr = cram1_wr_pending ? cram1_wr_addr_r :
+                     cram1_rd_pending ? cram1_rd_addr_r :
+                     cpu_psram_addr;
+assign psram1_wdata = cram1_wr_pending ? cram1_wr_data_r : cpu_psram_wdata;
+assign psram1_wstrb = cram1_wr_pending ? 4'b1111 : cpu_psram_wstrb;
+
+// Feedback to CPU: select based on bank
+assign cpu_psram_rdata = cpu_on_bank0 ? psram_mux_rdata : psram1_rdata;
+assign cpu_psram_busy = cpu_on_bank0 ? (bridge_psram_wr_active | psram_mux_busy) :
+                                       (bridge_cram1_active | psram1_busy);
+assign cpu_psram_rdata_valid = cpu_on_bank0 ? psram_mux_rdata_valid : psram1_rdata_valid;
 
 
 //
@@ -1050,6 +1369,18 @@ assign cpu_psram_rdata_valid = psram_mux_rdata_valid;
     wire    [31:0]  cmd_bridge_rd_data;
 
     wire reset_n = reset_n_apf;
+
+    // Shutdown handshake CDC: bridge (clk_74a) ↔ CPU (clk_cpu)
+    wire shutdown_pending_74a;  // from core_bridge_cmd (clk_74a domain)
+    wire shutdown_ack_cpu;      // from axi_periph_slave (clk_cpu domain)
+
+    // Sync shutdown_pending from clk_74a → clk_cpu
+    wire shutdown_pending_cpu;
+    synch_3 sync_shutdown_pending(shutdown_pending_74a, shutdown_pending_cpu, clk_cpu);
+
+    // Sync shutdown_ack from clk_cpu → clk_74a
+    wire shutdown_ack_74a;
+    synch_3 sync_shutdown_ack(shutdown_ack_cpu, shutdown_ack_74a, clk_74a);
 
     wire            status_boot_done = pll_core_locked_s;
     wire            status_setup_done = pll_core_locked_s;
@@ -1171,26 +1502,17 @@ assign cpu_psram_rdata_valid = psram_mux_rdata_valid;
     reg             datatable_wren;
     reg     [31:0]  datatable_data;
 
-// Write save slot size to datatable after all data slots are loaded.
-// The bridge reads datatable entry (slot_id * 2 + 1) at shutdown
-// to know how many bytes to read back from SDRAM and save to SD card.
-// Slot 10: entry index = 10 * 2 + 1 = 21, size = 256KB.
-reg dt_init_done;
-always @(posedge clk_74a or negedge reset_n_apf) begin
-    if (~reset_n_apf) begin
-        datatable_addr <= 0;
-        datatable_data <= 0;
-        datatable_wren <= 0;
-        dt_init_done   <= 0;
-    end else begin
-        datatable_wren <= 0;
-        if (dataslot_allcomplete && !dt_init_done) begin
-            datatable_addr <= 10'd21;           // slot 10 * 2 + 1
-            datatable_data <= 32'h00040000;     // 256KB
-            datatable_wren <= 1;
-            dt_init_done   <= 1;
-        end
-    end
+// Write save slot size to datatable so the bridge knows how many bytes to
+// read back at shutdown.  The bridge gets the DMA address from data.json,
+// but reads the ACTUAL size from the datatable at runtime.
+// Datatable layout: slot_index * 2 + 0 = address, slot_index * 2 + 1 = size.
+// Our save slot ("Saves", id 5) is at array index 5 in data.json's data_slots[].
+// NES/PCEngine CD cores both write size here — without it, bridge sees 0 and
+// skips readback entirely (no .sav file created).
+always @(posedge clk_74a) begin
+    datatable_wren <= 1;
+    datatable_addr <= 5 * 2 + 1;    // slot index 5, size entry
+    datatable_data <= 32'h10000;    // 64KB (matches data.json size_maximum)
 end
 
 core_bridge_cmd icb (
@@ -1249,6 +1571,9 @@ core_bridge_cmd icb (
     .savestate_load_err     ( savestate_load_err ),
 
     .osnotify_inmenu        ( osnotify_inmenu ),
+
+    .shutdown_pending       ( shutdown_pending_74a ),
+    .shutdown_ack_s         ( shutdown_ack_74a ),
 
     .target_dataslot_read       ( target_dataslot_read ),
     .target_dataslot_write      ( target_dataslot_write ),
@@ -1462,21 +1787,30 @@ assign video_hs = vidout_hs;
         .opl_write_req(opl_write_req),
         .opl_write_addr(opl_write_addr),
         .opl_write_data(opl_write_data),
-        .opl_ack(opl_ack)
+        .opl_ack(opl_ack),
+        .game_id(game_id_sync2),
+        .shutdown_pending(shutdown_pending_cpu),
+        .shutdown_ack(shutdown_ack_cpu)
     );
 
-    // Slave → io_sdram pulse adapter
+    // Slave → io_sdram pulse adapter + bridge direct SDRAM reads
     reg sdram_accepted_r;
     reg sdram_cmd_forwarded;
+    reg bridge_direct_rd_active;    // Bridge read issued, waiting for data
+    reg bridge_direct_rd_complete;  // Pulse: bridge read data captured
+    reg [31:0] bridge_direct_rd_data;
+
     always @(posedge clk_ram_controller) begin
         ram1_word_rd <= 0;
         ram1_word_wr <= 0;
         ram1_word_burst_len <= 4'd0;
         sdram_accepted_r <= 0;
+        bridge_direct_rd_complete <= 0;
 
         if (!sdram_slave_rd && !sdram_slave_wr)
             sdram_cmd_forwarded <= 0;
 
+        // Priority 1: AXI slave (CPU path)
         if (!ram1_word_busy && !sdram_cmd_forwarded &&
             (sdram_slave_rd || sdram_slave_wr)) begin
             ram1_word_rd <= sdram_slave_rd;
@@ -1488,6 +1822,24 @@ assign video_hs = vidout_hs;
             sdram_accepted_r <= 1;
             sdram_cmd_forwarded <= 1;
         end
+        // Priority 2: Bridge direct SDRAM read (bypasses AXI entirely)
+        else if (!ram1_word_busy && !bridge_direct_rd_active &&
+                 bridge_rd_sync4 && !bridge_rd_done) begin
+            ram1_word_rd <= 1;
+            ram1_word_addr <= bridge_addr_ram_clk[25:2];
+            bridge_direct_rd_active <= 1;
+        end
+
+        // Capture bridge read result
+        if (bridge_direct_rd_active && ram1_word_q_valid) begin
+            bridge_direct_rd_data <= ram1_word_q;
+            bridge_direct_rd_complete <= 1;
+            bridge_direct_rd_active <= 0;
+        end
+
+        // Clear active when request goes away
+        if (!bridge_rd_sync4)
+            bridge_direct_rd_active <= 0;
     end
 
     // AXI4 bridge master
@@ -1497,10 +1849,10 @@ assign video_hs = vidout_hs;
         .fifo_q(bridge_wr_fifo_q),
         .fifo_empty(bridge_wr_fifo_empty),
         .fifo_rdreq(bridge_wr_fifo_drain),
-        .bridge_rd_req(bridge_rd_sync4),
-        .bridge_rd_addr(bridge_addr_ram_clk[25:2]),
-        .bridge_rd_data(bridge_axi_rd_data),
-        .bridge_rd_done(bridge_axi_rd_done),
+        .bridge_rd_req(1'b0),           // Reads bypass AXI — handled directly
+        .bridge_rd_addr(24'b0),
+        .bridge_rd_data(),
+        .bridge_rd_done(),
         .m_axi_arvalid(bridge_m_arvalid), .m_axi_arready(bridge_m_arready),
         .m_axi_araddr(bridge_m_araddr),   .m_axi_arlen(bridge_m_arlen),
         .m_axi_rvalid(bridge_m_rvalid),   .m_axi_rdata(bridge_m_rdata),
@@ -1645,7 +1997,8 @@ assign video_hs = vidout_hs;
         .psram_wstrb(cpu_psram_wstrb),
         .psram_rdata(cpu_psram_rdata),
         .psram_busy(cpu_psram_busy),
-        .psram_rdata_valid(cpu_psram_rdata_valid)
+        .psram_rdata_valid(cpu_psram_rdata_valid),
+        .psram_bank(cpu_psram_bank)
     );
 
     // Terminal display (40x30 characters, 320x240 pixels)

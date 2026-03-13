@@ -5,6 +5,12 @@
             "id": 666,
             "select": false
         },
+        "memory_writes": [
+            {
+                "address": "0xF7000010",
+                "data": "0x00000003"
+            }
+        ],
         "data_slots": [
             {
                 "id": 0,

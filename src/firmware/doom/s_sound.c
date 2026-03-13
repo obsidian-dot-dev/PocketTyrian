@@ -108,10 +108,11 @@ static channel_t*       channels;
 
 // These are not used, but should be (menu).
 // Maximum volume of a sound effect.
-// Internal default is max out of 0-15.
+// Default max (15 out of 0-15).
 int             snd_SfxVolume = 15;
 
-// Maximum volume of music. Useless so far.
+// Maximum volume of music.
+// Default max (15 out of 0-15).
 int             snd_MusicVolume = 15;
 
 

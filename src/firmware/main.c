@@ -18,7 +18,6 @@ volatile unsigned int pd_dbg_info = 0;
 /* Data slot IDs (match data.json) */
 #define WAD_SLOT_ID     0
 #define DOOM_SLOT_ID    1
-
 /* External symbols from linker */
 extern char _doom_bss_start[], _doom_bss_end[];
 extern char _runtime_stack_top[];
@@ -99,7 +98,7 @@ int main(void) {
     /* Clear BSS */
     clear_doom_bss();
 
-    /* Jump to Doom */
+    /* Jump to Doom (saves already in CRAM1 — bridge auto-loaded from SD) */
     switch_to_runtime_stack_and_call(doom_main, _runtime_stack_top);
 
     while (1) {}

@@ -28,6 +28,7 @@
 /* From doom_sound.c — non-blocking audio FIFO drain */
 extern void I_SubmitSound(void);
 
+
 /* ============================================
  * Hardware register definitions
  * ============================================ */
@@ -45,6 +46,8 @@ extern void I_SubmitSound(void);
 #define SYS_CONT1_KEY       (*(volatile uint32_t *)(SYS_BASE + 0x50))
 #define SYS_CONT1_JOY       (*(volatile uint32_t *)(SYS_BASE + 0x54))
 #define SYS_CONT1_TRIG      (*(volatile uint32_t *)(SYS_BASE + 0x58))
+#define SYS_SHUTDOWN        (*(volatile uint32_t *)(SYS_BASE + 0x6C))
+
 
 /* SDRAM framebuffer addresses (CPU byte addresses) */
 #define SDRAM_BASE          0x10000000
@@ -162,11 +165,10 @@ PD_FASTTEXT void I_FinishUpdate(void)
         sink = flush[i];
     (void)sink;
 
-    /* Wait for any previous swap to complete before requesting a new one. */
-    while (SYS_FB_SWAP)
-        ;
-
-    /* Request buffer swap on next vsync */
+    /* Request buffer swap on next vsync.  I_StartFrame() at the top
+     * of the game loop waits for this swap to complete before any
+     * drawing begins, preventing the CPU from writing into the
+     * buffer that the FPGA is still scanning out. */
     SYS_FB_SWAP = 1;
 
     /* Toggle screens[0] between the two framebuffers */
@@ -207,6 +209,12 @@ byte *I_ZoneBase(int *size)
 
 int I_GetTime(void)
 {
+    /* Shutdown check: bridge reads CRAM1 directly, just ack and halt */
+    if (SYS_SHUTDOWN & 1) {
+        SYS_SHUTDOWN = 1;  /* ack */
+        while (1) {}        /* halt — hardware reset follows */
+    }
+
     /* Read 64-bit cycle counter, convert to 35 Hz tics */
     uint32_t lo = SYS_CYCLE_LO;
     uint32_t hi = SYS_CYCLE_HI;
@@ -242,8 +250,9 @@ int key_r1 = '.';    /* R1: strafe right */
 int key_l2 = KEY_WPNDOWN;  /* L2: previous weapon */
 int key_r2 = KEY_WPNUP;   /* R2: next weapon */
 
-/* Always-run: inject KEY_RSHIFT on first tic */
-static int always_run_sent = 0;
+/* gamekeydown: Doom's key state array — used to check if always-run
+ * key is still held (G_DoLoadLevel clears it on every level load). */
+extern boolean gamekeydown[];
 
 /* Weapon cycle key posted on previous frame (0 = none) */
 static int weapon_cycle_key = 0;
@@ -258,6 +267,16 @@ static int menu_enter_down = 0;
 
 void I_StartFrame(void)
 {
+    /* Wait for any pending framebuffer swap to complete before the
+     * game loop draws the next frame.  This ensures the CPU never
+     * writes into the buffer that the FPGA is still scanning out
+     * (which causes flickering on menus/status bar).
+     * Placed here rather than at the end of I_FinishUpdate so that
+     * audio mixing (I_UpdateSound + I_SubmitSound, after D_Display)
+     * is not blocked by the vsync wait — prevents music slowdown. */
+    while (SYS_FB_SWAP)
+        ;
+
     /* Drain pending audio into the FIFO at the top of the frame too,
      * so submission isn't limited to one chance per loop iteration. */
     I_SubmitSound();
@@ -265,16 +284,23 @@ void I_StartFrame(void)
 
 void I_StartTic(void)
 {
+    /* Shutdown handshake: bridge reads CRAM1 directly, just ack and halt */
+    if (SYS_SHUTDOWN & 1) {
+        SYS_SHUTDOWN = 1;  /* ack */
+        while (1) {}        /* halt — bridge will reset us */
+    }
+
     event_t event;
 
-    /* Always-run: hold KEY_RSHIFT permanently */
-    if (!always_run_sent) {
+    /* Always-run: keep KEY_RSHIFT held permanently.
+     * Must re-send every tic because G_DoLoadLevel() clears gamekeydown
+     * on every level transition, dropping the key state. */
+    if (!gamekeydown[KEY_RSHIFT]) {
         event.type = ev_keydown;
         event.data1 = KEY_RSHIFT;
         event.data2 = 0;
         event.data3 = 0;
         D_PostEvent(&event);
-        always_run_sent = 1;
     }
 
     uint32_t buttons = SYS_CONT1_KEY;

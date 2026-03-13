@@ -2,11 +2,7 @@
 // AXI4 SDRAM Arbiter — 4 Masters, Fixed Priority
 //
 // Routes 4 AXI4 masters to 1 AXI4 slave (axi_sdram_slave).
-// Fixed priority: M0 (Span) > M1 (DMA) > M3 (Bridge) > M2 (CPU).
-// Bridge gets higher priority than CPU so the APF bridge can
-// read back nonvolatile save data from SDRAM at shutdown/flush
-// without being starved.  Bridge is idle during gameplay so this
-// has zero performance impact on the CPU.
+// Fixed priority: M0 (Span) > M1 (DMA) > M2 (CPU) > M3 (Bridge).
 // Single outstanding transaction — grants one master at a time,
 // holds until read completes (R.rlast) or write completes (B.bvalid).
 //
@@ -143,8 +139,7 @@ always @(posedge clk or posedge reset) begin
     end else begin
         case (arb_state)
         ST_IDLE: begin
-            // Fixed priority: M0 > M1 > M3 (Bridge) > M2 (CPU)
-            // Bridge before CPU so save readback/flush isn't starved.
+            // Fixed priority: M0 > M1 > M2 (CPU) > M3 (Bridge)
             if (m0_arvalid) begin
                 grant <= 2'd0;
                 arb_state <= ST_RD;
@@ -157,17 +152,17 @@ always @(posedge clk or posedge reset) begin
             end else if (m1_awvalid) begin
                 grant <= 2'd1;
                 arb_state <= ST_WR;
-            end else if (m3_arvalid) begin
-                grant <= 2'd3;
-                arb_state <= ST_RD;
-            end else if (m3_awvalid) begin
-                grant <= 2'd3;
-                arb_state <= ST_WR;
             end else if (m2_arvalid) begin
                 grant <= 2'd2;
                 arb_state <= ST_RD;
             end else if (m2_awvalid) begin
                 grant <= 2'd2;
+                arb_state <= ST_WR;
+            end else if (m3_arvalid) begin
+                grant <= 2'd3;
+                arb_state <= ST_RD;
+            end else if (m3_awvalid) begin
+                grant <= 2'd3;
                 arb_state <= ST_WR;
             end
         end

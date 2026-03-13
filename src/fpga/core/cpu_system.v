@@ -543,9 +543,12 @@ always @(posedge clk or posedge reset) begin
 
                 // Address decode for IO bus:
                 // 0x50-0x53 (uncached SDRAM alias) → SDRAM target
+                // 0x30-0x37 (uncached PSRAM/CRAM1) → PSRAM target
                 // Everything else → Local target
                 if (io_cmd_addr[31:26] == 6'b010100) begin
                     target_mem <= TGT_SDRAM;
+                end else if (io_cmd_addr[31:27] == 5'b00110) begin
+                    target_mem <= TGT_PSRAM;
                 end else begin
                     target_mem <= TGT_LOCAL;
                 end
@@ -562,6 +565,10 @@ always @(posedge clk or posedge reset) begin
                         m_sdram_awvalid <= 1;
                         m_sdram_awaddr <= io_cmd_addr;
                         m_sdram_awlen <= 0;
+                    end else if (io_cmd_addr[31:27] == 5'b00110) begin
+                        m_psram_awvalid <= 1;
+                        m_psram_awaddr <= io_cmd_addr;
+                        m_psram_awlen <= 0;
                     end else begin
                         m_local_awvalid <= 1;
                         m_local_awaddr <= io_cmd_addr;
@@ -577,6 +584,10 @@ always @(posedge clk or posedge reset) begin
                         m_sdram_arvalid <= 1;
                         m_sdram_araddr <= io_cmd_addr;
                         m_sdram_arlen <= 0;
+                    end else if (io_cmd_addr[31:27] == 5'b00110) begin
+                        m_psram_arvalid <= 1;
+                        m_psram_araddr <= io_cmd_addr;
+                        m_psram_arlen <= 0;
                     end else begin
                         m_local_arvalid <= 1;
                         m_local_araddr <= io_cmd_addr;

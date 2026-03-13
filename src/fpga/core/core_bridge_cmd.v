@@ -62,6 +62,10 @@ input   wire    [31:0]  savestate_maxloadsize,
 
 output  reg             osnotify_inmenu,
 
+// Shutdown handshake: CPU must flush saves before bridge reads SDRAM
+output  reg             shutdown_pending,
+input   wire            shutdown_ack_s,         // synchronized from CPU domain
+
 output  reg             savestate_start,        // core should detect rising edge on this,
 input   wire            savestate_start_ack,    // and then assert ack for at least 1 cycle
 input   wire            savestate_start_busy,   // assert constantly while in progress after ack
@@ -186,6 +190,9 @@ localparam  [3:0]   TARG_ST_WAITRESULT_DSO  = 'd15;
     reg             target_dataslot_openfile_1, target_dataslot_openfile_queue;
     
     
+// Shutdown timeout: ~100ms at 74.25 MHz = ~7.4M cycles
+reg [22:0] shutdown_timer;
+
 initial begin
     reset_n <= 0;
     dataslot_requestread <= 0;
@@ -196,7 +203,9 @@ initial begin
     savestate_start <= 0;
     savestate_load <= 0;
     osnotify_inmenu <= 0;
-    
+    shutdown_pending <= 0;
+    shutdown_timer <= 0;
+
     status_setup_done_queue <= 0;
     target_dataslot_read_queue <= 0;
     target_dataslot_write_queue <= 0;
@@ -352,6 +361,8 @@ always @(posedge clk) begin
         end
         16'h0011: begin
             // Reset Exit
+            shutdown_pending <= 0;
+            shutdown_timer <= 0;
             reset_n <= 1;
             hstate <= ST_DONE_OK;
         end

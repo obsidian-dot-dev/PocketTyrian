@@ -7,23 +7,10 @@ Doom (1993) running natively on the [Analogue Pocket](https://www.analogue.co/po
 1. Copy the contents of the `release/` directory to your Analogue Pocket SD card root
 2. Create a game directory under `Assets/pocketdoom/common/` (e.g. `doom/`, `doom2/`)
 3. Copy your IWAD file into that directory
-4. Create an instance JSON under `Assets/pocketdoom/ThinkElastic.PocketDoom/` (see [Adding Games & Mods](#adding-games--mods))
+4. Create an instance JSON under `Assets/pocketdoom/ThinkElastic.PocketDoom/` — see [Adding Games & Mods](#adding-games--mods) for step-by-step instructions
 5. For link cable multiplayer, you **must** use a **GB/GBC link cable** — GBA cables will NOT work
 
-### Supported IWADs
-
-| WAD | Game | Notes |
-|-----|------|-------|
-| `doom1.wad` | Doom (shareware) | Free, episode 1 only |
-| `doom.wad` | Doom (registered) | Episodes 1-3 |
-| `doomu.wad` | The Ultimate Doom | Episodes 1-4 |
-| `doom2.wad` | Doom II: Hell on Earth | 32 levels |
-| `plutonia.wad` | Final Doom: Plutonia Experiment | 32 levels |
-| `tnt.wad` | Final Doom: TNT Evilution | 32 levels |
-
 The game mode is auto-detected from WAD contents. The Pocket menu will list each instance JSON as a selectable entry.
-
-See [Installation Layout](#installation-layout) and [Adding Games & Mods](#adding-games--mods) below.
 
 ### Controls
 
@@ -450,6 +437,29 @@ Data slot `2` is the PWAD (optional). Slot `3` is the configuration. You can cre
 - **JTAG programming loses SDRAM data.** After JTAG programming, the Pocket must reload `doom.bin` and the WAD from the SD card. Always deploy both firmware and bitstream to the SD card for testing.
 - **Firmware and FPGA must match.** The BRAM initialization (MIF) is compiled into the bitstream. If `doom.bin` on the SD card doesn't match the MIF in the FPGA, `.fasttext` function calls will jump to wrong addresses and crash.
 
+## Changelog
+
+### v1.0.9
+
+**Save System**
+- PSRAM-based saves — eliminates D-cache coherency corruption that could silently corrupt save files
+- Per-game save filenames derived from WAD name (DOOM.sav, DOOM2.sav, etc.)
+
+**Video**
+- Full 320x240 rendering — no more black bars
+- Centered title screens, menus, intermission, and finale on 240-line display
+- Fixed status bar widget and weapon hand positions for taller screen
+- Smoother lighting — reduced visible light banding
+- Fixed uninitialized status bar buffer that could corrupt BRAM rendering functions
+
+**Audio**
+- Increased OPL2 music volume — removed excessive attenuation for better music/SFX balance
+- Fixed I2S clicking — registered mixer output eliminates race condition between FIFO read and I2S sample load
+
+**Other**
+- Initial Analogizer support with HV offset controls (contributed by [@RndMnkIII](https://github.com/RndMnkIII))
+- Auto-detect RISC-V cross-compiler prefix in Makefile
+
 ## License
 
 - **Doom engine:** GPL-2.0 (id Software)
@@ -463,5 +473,6 @@ Data slot `2` is the PWAD (optional). Slot `3` is the configuration. You can cre
 - [id Software](https://github.com/id-Software/DOOM) — Original Doom source release
 - [jotego/jtopl](https://github.com/jotego/jtopl) — Hardware OPL2 synthesizer core
 - [SpinalHDL/VexiiRiscv](https://github.com/SpinalHDL/VexiiRiscv) — RISC-V CPU core
+- [agg23](https://github.com/agg23) — openFPGA core architecture patterns and reference implementations (audio, video scanout, APF bridge integration)
 - [Analogue](https://www.analogue.co/developer) — Pocket openFPGA development framework
 - [dyreschlock](https://github.com/dyreschlock) — Platform image

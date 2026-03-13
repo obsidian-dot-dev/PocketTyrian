@@ -77,30 +77,38 @@ static int filename_to_slot(const char *pathname) {
 }
 
 /* ============================================
- * Save/Config file support (nonvolatile SDRAM region)
+ * Save/Config file support (single nonvolatile slot 10)
  *
- * Save data lives in a fixed SDRAM region at 0x13C00000 (256KB).
- * The APF bridge auto-loads this from SD card at boot and auto-saves
- * it back on shutdown.  The firmware can also trigger a mid-game
- * flush via the bridge target command register.
+ * One nonvolatile .sav file holds all 6 sub-saves (384KB total).
+ * Bridge auto-loads SD → CRAM1 at boot, auto-saves CRAM1 → SD at
+ * shutdown.  Derive flag (0x04) gives per-game filenames from the
+ * IWAD name (e.g. DOOM.sav, DOOM2.sav).
  *
- * Layout within the 256KB save region:
- *   6 sub-saves at 40KB (0xA000) offsets, 4-byte size header each.
- *   Total used = 6 * 0xA000 = 240KB (+ 16KB padding).
+ * CRAM1 layout: 6 × 64KB sub-saves at offsets 0x00000–0x50000.
+ * Each sub-save: [4-byte game_id] [4-byte size] [save data]
+ *
+ * At boot the firmware erases (zeros) any sub-save whose stored
+ * game_id doesn't match the current game.
+ *
+ * CPU reads/writes CRAM1 directly (uncached PSRAM — no D-cache
+ * coherency issues).
  *
  * Config (default.cfg) is read-only from deferload data slot 3.
  * ============================================ */
 
 #define FILE_FLAG_WRITE     1
 
-#define SAV_SUB_COUNT       6            /* Sub-saves per file */
-#define SAV_SUB_SIZE        0xA000       /* 40KB per sub-save */
-#define SAV_HEADER_SIZE     4            /* 4-byte size prefix per sub-save */
-#define SAV_BUF_SIZE        (SAV_SUB_SIZE)
+#define SAV_CRAM1_ADDR      0x30000000   /* CRAM1 save region (uncached PSRAM) */
+#define SAV_REGION_UC       ((volatile uint8_t *)SAV_CRAM1_ADDR)
+#define SAV_SLOT_COUNT      6            /* Save slots, one per data slot (10-15) */
+#define SAV_SLOT_SIZE       0x10000      /* 64KB per slot */
+#define SAV_SLOT_ID_BASE    10           /* Data slot ID (single nonvolatile slot) */
+#define SAV_HEADER_SIZE     8            /* 4-byte game_id + 4-byte size */
+#define SAV_BUF_SIZE        (SAV_SLOT_SIZE)
 
-/* Save region in SDRAM — matches data.json address + 0x10000000 */
-#define SAV_REGION_ADDR     0x13C00000
-#define SAV_REGION_UC       ((volatile uint8_t *)SDRAM_UNCACHED(SAV_REGION_ADDR))
+/* Game ID register — written by instance JSON memory_writes via bridge.
+ * Doom=1, Doom2=2, UltimateDoom=3, TNT=4, Plutonia=5. */
+#define SYS_GAME_ID     (*(volatile uint32_t *)0x40000068)
 
 /* Single shared buffer for save/config file operations.
  * Only one save file can be open for writing at a time. */
@@ -146,23 +154,64 @@ static int is_cfg_file(const char *pathname) {
 }
 
 static void flush_dcache(void);
+extern void term_printf(const char *fmt, ...);
 
-/* Read sub-save data from nonvolatile SDRAM region into sav_buf.
- * sub_idx: sub-save index (0-5).
- * Returns saved_size on success, 0 on empty/corrupt. */
-static uint32_t sav_read_from_slot(int sub_idx) {
-    uint32_t sub_offset = (uint32_t)sub_idx * SAV_SUB_SIZE;
-    volatile uint32_t *uc = (volatile uint32_t *)(SAV_REGION_UC + sub_offset);
+/* Erase save slots whose game_id doesn't match the current game.
+ * Called once at boot after the bridge auto-loads .sv files into SDRAM.
+ * Zeroing the SDRAM means the bridge will save zeros at shutdown,
+ * effectively clearing stale saves from a different game. */
+#define SYS_DISPLAY_MODE_F (*(volatile uint32_t *)0x4000000C)
 
-    /* Read size header from SDRAM via uncached alias */
-    uint32_t saved_size = uc[0];
+static int sav_slots_cleared = 0;
+static void sav_clear_incompatible(void) {
+    if (sav_slots_cleared) return;
+    sav_slots_cleared = 1;
+
+    uint32_t game_id = SYS_GAME_ID;
+    if (game_id == 0) return;  /* No game ID set, skip */
+
+    for (int i = 0; i < SAV_SLOT_COUNT; i++) {
+        uint32_t slot_offset = (uint32_t)i * SAV_SLOT_SIZE;
+        volatile uint32_t *uc = (volatile uint32_t *)(SAV_REGION_UC + slot_offset);
+        uint32_t stored_id = uc[0];
+
+        /* Skip empty slots and slots that match */
+        if (stored_id == 0 || stored_id == 0xFFFFFFFF || stored_id == game_id)
+            continue;
+
+        /* Erase the entire slot — bridge will save zeros at shutdown */
+        volatile uint8_t *dst = SAV_REGION_UC + slot_offset;
+        for (uint32_t j = 0; j < SAV_SLOT_SIZE; j++)
+            dst[j] = 0;
+    }
+}
+
+/* Read save data from nonvolatile SDRAM region into sav_buf.
+ * slot_idx: save slot index (0-5), maps to data slots 10-15.
+ * Layout per slot: [4-byte game_id] [4-byte size] [data]
+ * Returns saved_size on success, 0 on empty/incompatible. */
+static uint32_t sav_read_from_slot(int slot_idx) {
+    sav_clear_incompatible();  /* Erase mismatched slots on first access */
+
+    uint32_t slot_offset = (uint32_t)slot_idx * SAV_SLOT_SIZE;
+    volatile uint32_t *uc = (volatile uint32_t *)(SAV_REGION_UC + slot_offset);
+
+    /* Check game ID tag — reject saves from a different game */
+    uint32_t game_id = SYS_GAME_ID;
+    uint32_t stored_id = uc[0];
+
+    if (game_id != 0 && stored_id != game_id)
+        return 0;
+
+    /* Read size from second word */
+    uint32_t saved_size = uc[1];
     if (saved_size == 0 || saved_size == 0xFFFFFFFF ||
-        saved_size > (SAV_SUB_SIZE - SAV_HEADER_SIZE))
+        saved_size > (SAV_SLOT_SIZE - SAV_HEADER_SIZE))
         return 0;
 
     /* Copy data (after header) to sav_buf */
     memset(sav_buf, 0, SAV_BUF_SIZE);
-    volatile uint8_t *src = SAV_REGION_UC + sub_offset + SAV_HEADER_SIZE;
+    volatile uint8_t *src = SAV_REGION_UC + slot_offset + SAV_HEADER_SIZE;
     for (uint32_t i = 0; i < saved_size; i++)
         ((uint8_t *)sav_buf)[i] = src[i];
 
@@ -181,27 +230,29 @@ static void flush_dcache(void) {
     (void)sink;
 }
 
-/* Write sav_buf to nonvolatile SDRAM region.
- * sub_idx: sub-save index (0-5).
+/* Write sav_buf to CRAM1 (bridge reads CRAM1 directly at shutdown).
+ * slot_idx: save slot index (0-5).
  * actual_size: number of bytes of data in sav_buf. */
-static void sav_persist(int sub_idx, uint32_t actual_size) {
-    uint32_t sub_offset = (uint32_t)sub_idx * SAV_SUB_SIZE;
+static void sav_persist(int slot_idx, uint32_t actual_size) {
+    uint32_t slot_offset = (uint32_t)slot_idx * SAV_SLOT_SIZE;
 
-    /* Write size header + data to save region via uncached alias */
-    volatile uint32_t *hdr = (volatile uint32_t *)(SAV_REGION_UC + sub_offset);
-    hdr[0] = actual_size;
+    /* Write game ID tag + size + data to CRAM1 (uncached) */
+    volatile uint32_t *hdr = (volatile uint32_t *)(SAV_REGION_UC + slot_offset);
+    hdr[0] = SYS_GAME_ID;    /* game ID tag */
+    hdr[1] = actual_size;     /* data size */
 
-    volatile uint8_t *dst = SAV_REGION_UC + sub_offset + SAV_HEADER_SIZE;
+    volatile uint8_t *dst = SAV_REGION_UC + slot_offset + SAV_HEADER_SIZE;
     for (uint32_t i = 0; i < actual_size; i++)
         dst[i] = ((uint8_t *)sav_buf)[i];
 
-    /* Flush D-cache so bridge reads clean SDRAM data */
-    flush_dcache();
 }
 
-/* Read WAD header from a data slot to determine file size.
+
+
+/* Read WAD header + directory from a data slot to determine file size.
  * WAD header: char[4] magic, int32 numlumps, int32 diroffset
- * File size = diroffset + numlumps * 16 */
+ * Some PWADs place the directory before lump data, so we must scan all
+ * directory entries to find the true file extent. */
 static uint32_t wad_get_size(int slot_id) {
     uint32_t header[3];
     if (dataslot_read(slot_id, 0, (void *)DMA_BUFFER, 12) != 0)
@@ -214,7 +265,33 @@ static uint32_t wad_get_size(int slot_id) {
 
     uint32_t numlumps = header[1];
     uint32_t diroffset = header[2];
-    return diroffset + numlumps * 16;
+    uint32_t dir_end = diroffset + numlumps * 16;
+
+    /* Scan directory entries to find max(filepos + size).
+     * Each entry is 16 bytes: int32 filepos, int32 size, char[8] name.
+     * Read in chunks via DMA bounce buffer. */
+    uint32_t max_end = dir_end;
+    uint32_t dir_remaining = numlumps * 16;
+    uint32_t dir_off = diroffset;
+
+    while (dir_remaining > 0) {
+        uint32_t chunk = dir_remaining > DMA_CHUNK_SIZE ? DMA_CHUNK_SIZE : dir_remaining;
+        if (dataslot_read(slot_id, dir_off, (void *)DMA_BUFFER, chunk) != 0)
+            break;
+        uint32_t *entries = (uint32_t *)SDRAM_UNCACHED(DMA_BUFFER);
+        uint32_t n_entries = chunk / 16;
+        for (uint32_t i = 0; i < n_entries; i++) {
+            uint32_t lump_pos  = entries[i * 4 + 0];
+            uint32_t lump_size = entries[i * 4 + 1];
+            uint32_t lump_end = lump_pos + lump_size;
+            if (lump_end > max_end)
+                max_end = lump_end;
+        }
+        dir_off += chunk;
+        dir_remaining -= chunk;
+    }
+
+    return max_end;
 }
 
 /* ============================================
@@ -424,9 +501,6 @@ int ferror(FILE *stream) {
 /* ============================================
  * Formatted I/O (minimal implementation)
  * ============================================ */
-
-/* Forward declaration from terminal */
-extern void term_printf(const char *fmt, ...);
 
 int vfprintf(FILE *stream, const char *format, va_list args) {
     if (stream && (stream->flags & FILE_FLAG_WRITE)) {
@@ -777,7 +851,7 @@ static void *fd_data[16] = {0};  /* Non-NULL = preloaded in SDRAM */
  * Separate from WAD fds to avoid array conflicts.
  * FD range: 100-106 for saves, 107 for config. */
 #define SAV_FD_BASE     100
-#define SAV_FD_CFG      (SAV_FD_BASE + SAV_SUB_COUNT)
+#define SAV_FD_CFG      (SAV_FD_BASE + SAV_SLOT_COUNT)
 
 static uint32_t sav_fd_offset = 0;
 static uint32_t sav_fd_size = 0;
@@ -791,13 +865,15 @@ int open(const char *pathname, int flags, ...) {
         int sub_idx = sav_slot_from_name(pathname);
         if (sub_idx < 0) return -1;
 
+        sav_clear_incompatible();  /* Erase stale data from other games */
+
         if (sav_fd_used) return -1;  /* Only one save fd at a time */
 
         if (flags & O_WRONLY) {
             /* Write mode: prepare sav_buf for writing */
             memset(sav_buf, 0, SAV_BUF_SIZE);
             sav_fd_offset = 0;
-            sav_fd_size = SAV_SUB_SIZE - SAV_HEADER_SIZE;
+            sav_fd_size = SAV_SLOT_SIZE - SAV_HEADER_SIZE;
             sav_fd_writing = 1;
             sav_fd_sub_idx = sub_idx;
             sav_write_sub_idx = sub_idx;

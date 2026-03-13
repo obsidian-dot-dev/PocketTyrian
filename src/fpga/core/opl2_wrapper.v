@@ -143,12 +143,12 @@ end
 // ============================================
 // Audio output latch
 // ============================================
-// Latch on sample strobe, right-shift by 1 for volume balance
+// Latch on sample strobe — full 16-bit output, volume controlled in mixer
 always @(posedge clk or negedge reset_n) begin
     if (!reset_n) begin
         opl_audio_out <= 16'sd0;
     end else if (opl_sample) begin
-        opl_audio_out <= opl_snd >>> 1;
+        opl_audio_out <= opl_snd;
     end
 end
 

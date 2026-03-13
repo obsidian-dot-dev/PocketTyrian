@@ -52,14 +52,14 @@
                 "deferload": true
             },
             {
-                "id": 10,
+                "id": 5,
                 "name": "Saves",
                 "required": false,
-                "parameters": "0x04",
+                "parameters": "0x84",
                 "nonvolatile": true,
-                "extensions": ["sav"],
-                "address": "0x03C00000",
-                "size_maximum": "0x00040000"
+                "address": "0x30000000",
+                "size_maximum": "0x10000",
+                "extensions": ["sav"]
             }
         ]
     }

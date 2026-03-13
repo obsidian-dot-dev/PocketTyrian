@@ -235,10 +235,19 @@ void I_SetChannels(void)
     steptablemid[-64] = 32768;
 
     /* Volume lookup table: converts unsigned 8-bit sample + volume
-     * to signed 16-bit output. Sample 128 = silence. */
+     * to signed 16-bit output. Sample 128 = silence.
+     *
+     * Original Doom formula: (i * (j-128) * 256) / 127
+     * That gives ±32,512 per channel — fine for DOS 8-bit DAC but
+     * 8 channels sum to 260K, far exceeding 16-bit range (±32,767).
+     * The FPGA also adds OPL music on top.
+     *
+     * Scale by 1/8: max per channel = 127*32 = 4064.
+     * 8 channels worst-case = 32512.  Soft clamp in mixer and
+     * hardware clamp in audio_output.v handle rare peaks. */
     for (i = 0; i < 128; i++)
         for (j = 0; j < 256; j++)
-            vol_lookup[i * 256 + j] = (i * (j - 128) * 256) / 127;
+            vol_lookup[i * 256 + j] = (i * (j - 128) * 32) / 127;
 }
 
 /* ============================================
@@ -418,35 +427,10 @@ PD_FASTTEXT void I_SubmitSound(void)
         if (idx >= submit_mix_count - 1)
             idx = submit_mix_count - 2;
 
-        /* Cubic Hermite interpolation (4-point) for smoother
-         * reconstruction — suppresses imaging artifacts from
-         * the 11 kHz → 48 kHz upsample.  Falls back to the
-         * boundary sample when idx is at the edges. */
-        int i0 = (idx > 0) ? idx - 1 : 0;
-        int i3 = (idx + 2 < submit_mix_count) ? idx + 2 : submit_mix_count - 1;
-        int t = frac;  /* 0..65535 = 0.0..1.0 in 16.16 */
-
-        /* Left channel */
-        int y0 = mixbuffer[i0 * 2];
-        int y1 = mixbuffer[idx * 2];
-        int y2 = mixbuffer[(idx + 1) * 2];
-        int y3 = mixbuffer[i3 * 2];
-        int c0 = y1;
-        int c1 = (y2 - y0) >> 1;
-        int c2 = y0 - (5 * y1 >> 1) + (y2 << 1) - (y3 >> 1);
-        int c3 = ((y3 - y0) + 3 * (y1 - y2)) >> 1;
-        int left = c0 + (int)(((int64_t)t * (c1 + (int)(((int64_t)t * (c2 + (int)(((int64_t)t * c3) >> 16))) >> 16))) >> 16);
-
-        /* Right channel */
-        y0 = mixbuffer[i0 * 2 + 1];
-        y1 = mixbuffer[idx * 2 + 1];
-        y2 = mixbuffer[(idx + 1) * 2 + 1];
-        y3 = mixbuffer[i3 * 2 + 1];
-        c0 = y1;
-        c1 = (y2 - y0) >> 1;
-        c2 = y0 - (5 * y1 >> 1) + (y2 << 1) - (y3 >> 1);
-        c3 = ((y3 - y0) + 3 * (y1 - y2)) >> 1;
-        int right = c0 + (int)(((int64_t)t * (c1 + (int)(((int64_t)t * (c2 + (int)(((int64_t)t * c3) >> 16))) >> 16))) >> 16);
+        /* Linear interpolation: lerp between adjacent samples.
+         * Simpler than Hermite, avoids overshoot artifacts. */
+        int left  = mixbuffer[idx * 2]     + (int)(((int64_t)frac * (mixbuffer[(idx + 1) * 2]     - mixbuffer[idx * 2])) >> 16);
+        int right = mixbuffer[idx * 2 + 1] + (int)(((int64_t)frac * (mixbuffer[(idx + 1) * 2 + 1] - mixbuffer[idx * 2 + 1])) >> 16);
 
         AUDIO_SAMPLE = ((uint32_t)(uint16_t)left << 16) | (uint16_t)right;
 

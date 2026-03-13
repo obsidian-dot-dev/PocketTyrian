@@ -157,6 +157,13 @@ module video_CRT_scanout_indexed_BRAM (
     // SDRAM clock domain - Burst read FSM
     // =========================================
 
+    // Latch fb_base_addr once per frame so all 240 lines read from the
+    // same buffer.  Without this, a mid-frame swap causes the top and
+    // bottom halves to come from different framebuffers (flicker/tear).
+    // Latched when the first line (line 0) is fetched — already CDC-safe
+    // since it happens inside the SDRAM-domain FSM.
+    reg [24:0] fb_base_addr_latched;
+
     // Sync fetch request to SDRAM domain
     reg fetch_request_sync1, fetch_request_sync2;
     reg fetch_request_ack;
@@ -193,13 +200,19 @@ module video_CRT_scanout_indexed_BRAM (
                     fetch_request_ack <= 0;
 
                     // Rising edge of fetch request
+                    // During vblank (no fetch requests), track fb_base_addr so
+                    // the swap is picked up.  Once fetching starts, the value
+                    // is frozen for the entire frame.
+                    if (!fetch_request_sync2)
+                        fb_base_addr_latched <= fb_base_addr;
+
                     if (fetch_request_sync2 && !fetch_request_ack) begin
                         // Calculate SDRAM address for this line
                         // Each line is 320 bytes = 160 x 16-bit words
                         // For 8-bit indexed: line_addr = base + line * 320 / 2 = base + line * 160
                         fetch_line_sdram <= fetch_line_latched;
                         // burst_addr = base + line * 160 = base + line * 128 + line * 32
-                        burst_addr <= fb_base_addr + {fetch_line_latched, 7'b0} + {2'b0, fetch_line_latched, 5'b0};
+                        burst_addr <= fb_base_addr_latched + {fetch_line_latched, 7'b0} + {2'b0, fetch_line_latched, 5'b0};
                         burst_len <= 11'd80;   // 80 READ cmds x BL=2 = 160 x 16-bit words = 320 pixels
                         burst_rd <= 1;
                         write_ptr <= 0;

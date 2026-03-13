@@ -109,13 +109,9 @@ always @(posedge clk or posedge reset) begin
 
         case (state)
         S_IDLE: begin
-            // Priority: bridge read > FIFO drain write
-            if (bridge_rd_req && !rd_done_sent) begin
-                m_axi_arvalid <= 1;
-                m_axi_araddr <= {6'b0, bridge_rd_addr, 2'b0};
-                state <= S_RD_AR;
-            end else if (!fifo_empty) begin
-                // Latch FIFO data and pop
+            // Reads bypass AXI — handled directly in core_top.v
+            // Only process FIFO drain writes here
+            if (!fifo_empty) begin
                 fifo_rdreq <= 1;
                 m_axi_awvalid <= 1;
                 m_axi_awaddr <= {6'b0, fifo_q[55:32], 2'b0};
