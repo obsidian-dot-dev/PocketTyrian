@@ -20,8 +20,8 @@
 #include "z_zone.h"
 #include "m_argv.h"
 
-/* From doom_music.c — returns one music sample per call */
-extern int OPL_RenderSample(void);
+/* From doom_music.c — advance MUS parser based on real elapsed time */
+extern void OPL_AdvanceMusic(void);
 
 /* ============================================
  * Hardware audio registers
@@ -311,6 +311,9 @@ static int submit_mix_count;           /* Source samples in current mixbuffer */
 
 void I_UpdateSound(void)
 {
+    /* Advance MUS parser based on real elapsed time (decoupled from mix rate) */
+    OPL_AdvanceMusic();
+
     /* Drain any pending samples into the FIFO first */
     if (submit_pending)
         I_SubmitSound();
@@ -366,13 +369,6 @@ void I_UpdateSound(void)
                 if (channels[chan] >= channelsend[chan])
                     channels[chan] = 0;
             }
-        }
-
-        /* Advance MUS parser (music events) */
-        {
-            int music_sample = OPL_RenderSample();
-            dl += music_sample;
-            dr += music_sample;
         }
 
         /* Clamp to 16-bit signed range */

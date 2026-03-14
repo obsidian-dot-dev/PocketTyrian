@@ -459,26 +459,54 @@ mus_process_events(void)
 }
 
 /* ============================================
- * OPL_RenderSample — called once per sample
- * from I_UpdateSound() in doom_sound.c
+ * Cycle counter (100 MHz) for real-time MUS pacing
  * ============================================ */
 
-int
-OPL_RenderSample(void)
-{
-    if (!genmidi_loaded)
-        return 0;
+#define MUS_CYCLE_LO  (*(volatile uint32_t *)0x40000004)
 
-    /* Advance MUS parser when delay expires.
-     * OPL register writes happen here via opl_write() -> MMIO.
-     * Actual audio synthesis is done by hardware in the FPGA. */
-    if (mus_playing && !mus_paused) {
-        while (mus_delay <= 0 && mus_playing)
-            mus_process_events();
-        mus_delay -= 256;   /* 1 sample in 16.8 fixed-point */
+static uint32_t mus_last_cycles;
+static int      mus_time_init;
+
+/* ============================================
+ * OPL_AdvanceMusic — called once per game loop
+ * Advances MUS parser based on real elapsed time,
+ * decoupled from mixer sample count so music
+ * never slows down even if rendering is slow.
+ * ============================================ */
+
+void
+OPL_AdvanceMusic(void)
+{
+    if (!genmidi_loaded || !mus_playing || mus_paused)
+        return;
+
+    uint32_t now = MUS_CYCLE_LO;
+
+    if (!mus_time_init) {
+        mus_last_cycles = now;
+        mus_time_init = 1;
+        return;
     }
 
-    return 0;  /* Hardware generates audio — nothing to mix in software */
+    /* Elapsed cycles (handles 32-bit wrap naturally) */
+    uint32_t elapsed = now - mus_last_cycles;
+    mus_last_cycles = now;
+
+    /* Convert elapsed CPU cycles to 11025 Hz samples in 16.8 fixed-point.
+     * samples_fp = elapsed * SAMPLERATE * 256 / CPU_HZ
+     * = elapsed * 11025 * 256 / 100000000
+     * = elapsed * 2822400 / 100000000
+     * ≈ elapsed * 2822 / 100000  (avoid 32-bit overflow) */
+    int samples_fp = (int)((uint64_t)elapsed * 2822400 / 100000000);
+
+    /* Cap at ~100ms worth to prevent burst after long stalls */
+    if (samples_fp > 1102 * 256)
+        samples_fp = 1102 * 256;
+
+    mus_delay -= samples_fp;
+
+    while (mus_delay <= 0 && mus_playing)
+        mus_process_events();
 }
 
 /* ============================================
@@ -572,6 +600,7 @@ I_PlaySong(int handle, int looping)
     mus_paused  = 0;
     mus_pos     = mus_score_start;
     mus_delay   = 0;
+    mus_time_init = 0;  /* Reset real-time tracking */
 
     for (i = 0; i < MUS_CHANNELS; i++) {
         mus_chan_volume[i] = 100;

@@ -375,7 +375,14 @@ void R_GenerateLookup (int texnum)
 //
 // R_GetColumn
 //
-byte*
+// Single-entry lump cache: for single-patch textures every column comes
+// from the same WAD lump, so we skip 319 out of 320 W_CacheLumpNum calls
+// (each of which does a Z_ChangeTag write to zone metadata).
+//
+static int      gc_cachedlump;
+static byte*    gc_cacheddata;
+
+PD_FASTTEXT byte*
 R_GetColumn
 ( int           tex,
   int           col )
@@ -388,12 +395,31 @@ R_GetColumn
     ofs = texturecolumnofs[tex][col];
 
     if (lump > 0)
-        return (byte *)W_CacheLumpNum(lump,PU_CACHE)+ofs;
+    {
+        if (lump != gc_cachedlump)
+        {
+            gc_cacheddata = (byte *)W_CacheLumpNum(lump, PU_CACHE);
+            gc_cachedlump = lump;
+        }
+        return gc_cacheddata + ofs;
+    }
 
     if (!texturecomposite[tex])
         R_GenerateComposite (tex);
 
     return texturecomposite[tex] + ofs;
+}
+
+//
+// R_InvalidateColumnCache
+//
+// Must be called before each frame to prevent stale pointers
+// (zone memory could purge the cached lump between frames).
+//
+void R_InvalidateColumnCache(void)
+{
+    gc_cachedlump = -1;
+    gc_cacheddata = NULL;
 }
 
 

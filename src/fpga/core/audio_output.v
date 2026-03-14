@@ -135,14 +135,35 @@ wire [15:0] mix_clamp_r = (mix_r > 17'sd32767)  ? 16'h7FFF :
                            (mix_r < -17'sd32768) ? 16'h8000 :
                            mix_r[15:0];
 
-// Latch mixed output on audio_pop (48 kHz) so the I2S serializer
+// ============================================
+// DC blocker — removes DC offset to eliminate clicks/pops
+// from OPL2 key-on/off transients and level changes.
+// ============================================
+wire [15:0] dc_out_l;
+wire [15:0] dc_out_r;
+
+dc_blocker dc_blk_l (
+    .clk  (clk_audio),
+    .ce   (audio_pop),
+    .din  (mix_clamp_l),
+    .dout (dc_out_l)
+);
+
+dc_blocker dc_blk_r (
+    .clk  (clk_audio),
+    .ce   (audio_pop),
+    .din  (mix_clamp_r),
+    .dout (dc_out_r)
+);
+
+// Latch filtered output on audio_pop (48 kHz) so the I2S serializer
 // always reads a stable value — eliminates race with FIFO read timing.
 reg [15:0] active_l = 16'h0;
 reg [15:0] active_r = 16'h0;
 always @(posedge clk_audio) begin
     if (audio_pop) begin
-        active_l <= mix_clamp_l;
-        active_r <= mix_clamp_r;
+        active_l <= dc_out_l;
+        active_r <= dc_out_r;
     end
 end
 

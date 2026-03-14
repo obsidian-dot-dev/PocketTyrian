@@ -39,6 +39,9 @@ R_GetColumn
   int           col );
 
 
+// Invalidate R_GetColumn's single-entry lump cache (call once per frame).
+void R_InvalidateColumnCache(void);
+
 // I/O, setting up the stuff.
 void R_InitData (void);
 void R_PrecacheLevel (void);

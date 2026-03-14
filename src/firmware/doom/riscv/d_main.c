@@ -634,6 +634,15 @@ void D_DoomMain (void)
     // Auto-detect game mode from WAD contents now that lumps are loaded
     D_IdentifyGameMode ();
 
+    // Enable PWAD sprite overrides if a PWAD was successfully loaded
+    {
+        int h = open("pwad.wad", O_RDONLY);
+        if (h >= 0) {
+            modifiedgame = true;
+            close(h);
+        }
+    }
+
     printf ("M_Init: Init miscellaneous info.\n");
     M_Init ();
 

@@ -118,7 +118,7 @@ void R_InitPlanes (void)
 //
 // BASIC PRIMITIVE
 //
-void
+PD_FASTTEXT void
 R_MapPlane
 ( int           y,
   int           x1,
@@ -328,7 +328,7 @@ R_CheckPlane
 //
 // R_MakeSpans
 //
-void
+PD_FASTTEXT void
 R_MakeSpans
 ( int           x,
   int           t1,
@@ -365,7 +365,7 @@ R_MakeSpans
 // R_DrawPlanes
 // At the end of each frame.
 //
-void R_DrawPlanes (void)
+PD_FASTTEXT void R_DrawPlanes (void)
 {
     visplane_t*         pl;
     int                 light;
@@ -398,11 +398,9 @@ void R_DrawPlanes (void)
         {
             dc_iscale = pspriteiscale>>detailshift;
 
-            // Sky is allways drawn full bright,
-            //  i.e. colormaps[0] is used.
-            // Because of this hack, sky is not affected
-            //  by INVUL inverse mapping.
-            dc_colormap = colormaps;
+            // Sky is always drawn full bright (colormaps[0] = identity).
+            // Use dedicated R_DrawSkyColumn that skips the colormap
+            // indirection — saves one SDRAM read per pixel.
             dc_texturemid = skytexturemid;
             for (x=pl->minx ; x <= pl->maxx ; x++)
             {
@@ -414,7 +412,7 @@ void R_DrawPlanes (void)
                     angle = (viewangle + xtoviewangle[x])>>ANGLETOSKYSHIFT;
                     dc_x = x;
                     dc_source = R_GetColumn(skytexture, angle);
-                    colfunc ();
+                    R_DrawSkyColumn ();
                 }
             }
             continue;

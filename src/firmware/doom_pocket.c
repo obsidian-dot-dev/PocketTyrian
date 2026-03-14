@@ -254,8 +254,6 @@ int key_r2 = KEY_WPNUP;   /* R2: next weapon */
  * key is still held (G_DoLoadLevel clears it on every level load). */
 extern boolean gamekeydown[];
 
-/* Weapon cycle key posted on previous frame (0 = none) */
-static int weapon_cycle_key = 0;
 
 /* Virtual button states for shoulder/trigger buttons */
 static int l1_button_down = 0;
@@ -311,24 +309,16 @@ void I_StartTic(void)
     int cur_l2 = (buttons & PAD_TRIG_L2) != 0 || ((trig & 0xFFu) >= TRIG_PRESS_THRESHOLD);
     int cur_r2 = (buttons & PAD_TRIG_R2) != 0 || (((trig >> 8) & 0xFFu) >= TRIG_PRESS_THRESHOLD);
 
-    /* Release the synthetic weapon key from last frame */
-    if (weapon_cycle_key) {
-        event.type = ev_keyup;
-        event.data1 = weapon_cycle_key;
-        event.data2 = 0;
-        event.data3 = 0;
-        D_PostEvent(&event);
-        weapon_cycle_key = 0;
-    }
-
     for (unsigned i = 0; i < NUM_BUTTONS; i++) {
         uint32_t mask = button_map[i].button;
         if (changed & mask) {
             int k = button_map[i].key;
             int pressed = (buttons & mask) != 0;
             if ((k == KEY_WPNUP || k == KEY_WPNDOWN) && !menuactive) {
-                /* Weapon cycle: synthesize number key on press */
-                if (pressed && !weapon_cycle_key) {
+                /* Weapon cycle: set pendingweapon directly.
+                 * Bypasses ticcmd 3-bit encoding (can't handle weapon 8)
+                 * and Doom 2's shotgun→super-shotgun redirect. */
+                if (pressed) {
                     player_t *p = &players[consoleplayer];
                     int cur = (int)p->readyweapon;
                     int dir = (k == KEY_WPNUP) ? 1 : -1;
@@ -339,12 +329,7 @@ void I_StartTic(void)
                         if (p->weaponowned[next])
                             break;
                     }
-                    weapon_cycle_key = '1' + next;
-                    event.type = ev_keydown;
-                    event.data1 = weapon_cycle_key;
-                    event.data2 = 0;
-                    event.data3 = 0;
-                    D_PostEvent(&event);
+                    p->pendingweapon = next;
                 }
             } else {
                 event.type = pressed ? ev_keydown : ev_keyup;
@@ -388,8 +373,8 @@ void I_StartTic(void)
             if (trigs[i].cur != *trigs[i].prev) {
                 int k = trigs[i].key;
                 if (k == KEY_WPNUP || k == KEY_WPNDOWN) {
-                    /* Weapon cycle: synthesize number key on press */
-                    if (trigs[i].cur && !weapon_cycle_key) {
+                    /* Weapon cycle: set pendingweapon directly */
+                    if (trigs[i].cur) {
                         player_t *p = &players[consoleplayer];
                         int cur = (int)p->readyweapon;
                         int dir = (k == KEY_WPNUP) ? 1 : -1;
@@ -400,12 +385,7 @@ void I_StartTic(void)
                             if (p->weaponowned[next])
                                 break;
                         }
-                        weapon_cycle_key = '1' + next;
-                        event.type = ev_keydown;
-                        event.data1 = weapon_cycle_key;
-                        event.data2 = 0;
-                        event.data3 = 0;
-                        D_PostEvent(&event);
+                        p->pendingweapon = next;
                     }
                 } else if (k != 0) {
                     event.type = trigs[i].cur ? ev_keydown : ev_keyup;

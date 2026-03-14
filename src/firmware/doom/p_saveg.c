@@ -301,12 +301,26 @@ void P_UnArchiveThinkers (void)
             mobj = Z_Malloc (sizeof(*mobj), PU_LEVEL, NULL);
             memcpy (mobj, save_p, sizeof(*mobj));
             save_p += sizeof(*mobj);
-            mobj->state = &states[(int)mobj->state];
+            {
+                int si = (int)mobj->state;
+                if (si < 0 || si >= NUMSTATES)
+                    si = S_NULL;
+                mobj->state = &states[si];
+            }
             mobj->target = NULL;
             if (mobj->player)
             {
-                mobj->player = &players[(int)mobj->player-1];
-                mobj->player->mo = mobj;
+                int pi = (int)mobj->player - 1;
+                if (pi >= 0 && pi < MAXPLAYERS) {
+                    mobj->player = &players[pi];
+                    mobj->player->mo = mobj;
+                } else {
+                    mobj->player = NULL;
+                }
+            }
+            if ((unsigned)mobj->type >= NUMMOBJTYPES) {
+                Z_Free(mobj);
+                continue;  /* Corrupted save entry — skip */
             }
             P_SetThingPosition (mobj);
             mobj->info = &mobjinfo[mobj->type];

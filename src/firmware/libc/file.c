@@ -100,15 +100,68 @@ static int filename_to_slot(const char *pathname) {
 
 #define SAV_CRAM1_ADDR      0x30000000   /* CRAM1 save region (uncached PSRAM) */
 #define SAV_REGION_UC       ((volatile uint8_t *)SAV_CRAM1_ADDR)
-#define SAV_SLOT_COUNT      6            /* Save slots, one per data slot (10-15) */
-#define SAV_SLOT_SIZE       0x10000      /* 64KB per slot */
+#define SAV_SLOT_COUNT      6            /* Save slots 0-5 */
+#define SAV_SLOT_SIZE       0x10000      /* 64KB per slot in PSRAM (header + compressed) */
 #define SAV_SLOT_ID_BASE    10           /* Data slot ID (single nonvolatile slot) */
-#define SAV_HEADER_SIZE     8            /* 4-byte game_id + 4-byte size */
-#define SAV_BUF_SIZE        (SAV_SLOT_SIZE)
+#define SAV_V2_HEADER_SIZE  16           /* magic[4] + game_id[4] + comp_size[4] + uncomp_size[4] */
+#define SAV_V1_HEADER_SIZE  8            /* game_id[4] + size[4] (old format) */
+#define SAV_BUF_SIZE        0x30000      /* 192KB uncompressed buffer (SAVEGAMESIZE = 180KB) */
+
+/* Old v1 max data size (for validation during migration) */
+#define SAV_V1_MAX_DATA     (0x10000 - SAV_V1_HEADER_SIZE)
 
 /* Game ID register — written by instance JSON memory_writes via bridge.
- * Doom=1, Doom2=2, UltimateDoom=3, TNT=4, Plutonia=5. */
+ * Doom=1, Doom2=2, UltimateDoom=3, TNT=4, Plutonia=5.
+ * If 0, we derive an ID from the WAD headers at first use. */
 #define SYS_GAME_ID     (*(volatile uint32_t *)0x40000068)
+
+/* Auto-derived game ID from WAD headers (used when SYS_GAME_ID == 0) */
+static uint32_t sav_derived_id = 0;
+static int      sav_derived_id_valid = 0;
+
+/* FNV-1a hash — simple, good distribution */
+static uint32_t fnv1a(const uint8_t *data, int len, uint32_t hash) {
+    for (int i = 0; i < len; i++) {
+        hash ^= data[i];
+        hash *= 0x01000193;
+    }
+    return hash;
+}
+
+/* Derive a game ID by hashing the IWAD + PWAD headers.
+ * Each WAD header is 12 bytes: magic[4] + numlumps[4] + diroffset[4].
+ * This uniquely identifies the WAD combination.
+ * Bit 31 is set to avoid collision with manual IDs (1-5). */
+static uint32_t sav_get_game_id(void) {
+    uint32_t id = SYS_GAME_ID;
+    if (id != 0) return id;
+
+    if (sav_derived_id_valid) return sav_derived_id;
+    sav_derived_id_valid = 1;
+
+    uint32_t hash = 0x811c9dc5;  /* FNV offset basis */
+
+    /* Read IWAD header (slot 0, 12 bytes) */
+    if (dataslot_read(0, 0, (void *)DMA_BUFFER, 12) == 0) {
+        uint8_t hdr[12];
+        memcpy(hdr, SDRAM_UNCACHED(DMA_BUFFER), 12);
+        hash = fnv1a(hdr, 12, hash);
+    }
+
+    /* Read PWAD header (slot 2, 12 bytes) — may not exist */
+    if (dataslot_read(2, 0, (void *)DMA_BUFFER, 12) == 0) {
+        uint8_t hdr[12];
+        memcpy(hdr, SDRAM_UNCACHED(DMA_BUFFER), 12);
+        hash = fnv1a(hdr, 12, hash);
+    }
+
+    /* Set bit 31 to distinguish from manual IDs (1-5) */
+    hash |= 0x80000000;
+    if (hash == 0x80000000) hash = 0x80000001;  /* avoid edge case */
+
+    sav_derived_id = hash;
+    return hash;
+}
 
 /* Single shared buffer for save/config file operations.
  * Only one save file can be open for writing at a time. */
@@ -156,62 +209,213 @@ static int is_cfg_file(const char *pathname) {
 static void flush_dcache(void);
 extern void term_printf(const char *fmt, ...);
 
-/* Erase save slots whose game_id doesn't match the current game.
- * Called once at boot after the bridge auto-loads .sv files into SDRAM.
- * Zeroing the SDRAM means the bridge will save zeros at shutdown,
- * effectively clearing stale saves from a different game. */
+/* ============================================
+ * LZSS compression for save data
+ *
+ * Format: stream of 9-byte groups (1 flag byte + up to 8 tokens).
+ * Flag bit 0 = literal (1 byte), 1 = match (2 bytes).
+ * Match encoding: byte0 = offset_lo, byte1 = (offset_hi:4 | length-3:4).
+ * Offset 1-4096, length 3-18.
+ * ============================================ */
+#define LZ_WINDOW    4096
+#define LZ_MIN_MATCH 3
+#define LZ_MAX_MATCH 18
+#define LZ_HASH_BITS 12
+#define LZ_HASH_SIZE (1 << LZ_HASH_BITS)
+
+static int lz_htab[LZ_HASH_SIZE];
+
+static inline uint32_t lz_hash3(const uint8_t *p) {
+    return (((uint32_t)p[0] << 5) ^ ((uint32_t)p[1] << 3) ^ p[2])
+           & (LZ_HASH_SIZE - 1);
+}
+
+/* Compress src[0..slen-1] → dst[0..dmax-1].
+ * Returns compressed size, or -1 if output overflows dmax. */
+static int sav_compress(const uint8_t *src, int slen,
+                        volatile uint8_t *dst, int dmax)
+{
+    for (int i = 0; i < LZ_HASH_SIZE; i++) lz_htab[i] = -1;
+    int si = 0, di = 0;
+
+    while (si < slen) {
+        if (di >= dmax) return -1;
+        int flag_pos = di++;
+        uint8_t flags = 0;
+
+        for (int bit = 0; bit < 8 && si < slen; bit++) {
+            int best_len = 0, best_off = 0;
+
+            if (si + LZ_MIN_MATCH <= slen) {
+                uint32_t h = lz_hash3(src + si);
+                int cand = lz_htab[h];
+                lz_htab[h] = si;
+
+                if (cand >= 0 && (si - cand) <= LZ_WINDOW) {
+                    int len = 0;
+                    int max_len = slen - si;
+                    if (max_len > LZ_MAX_MATCH) max_len = LZ_MAX_MATCH;
+                    while (len < max_len && src[cand + len] == src[si + len])
+                        len++;
+                    if (len >= LZ_MIN_MATCH) {
+                        best_len = len;
+                        best_off = si - cand;
+                    }
+                }
+            }
+
+            if (best_len >= LZ_MIN_MATCH) {
+                flags |= (1 << bit);
+                if (di + 2 > dmax) return -1;
+                int off_enc = best_off - 1;
+                dst[di++] = (uint8_t)(off_enc & 0xFF);
+                dst[di++] = (uint8_t)(((off_enc >> 8) & 0x0F) << 4
+                                      | (best_len - LZ_MIN_MATCH));
+                si += best_len;
+            } else {
+                if (di + 1 > dmax) return -1;
+                dst[di++] = src[si++];
+            }
+        }
+        dst[flag_pos] = flags;
+    }
+    return di;
+}
+
+/* Decompress src[0..slen-1] → dst[0..dmax-1].
+ * Returns decompressed size, or -1 on error. */
+static int sav_decompress(volatile const uint8_t *src, int slen,
+                          uint8_t *dst, int dmax)
+{
+    int si = 0, di = 0;
+
+    while (si < slen) {
+        uint8_t flags = src[si++];
+        for (int bit = 0; bit < 8; bit++) {
+            if (flags & (1 << bit)) {
+                /* Back-reference */
+                if (si + 2 > slen) goto done;
+                int b0 = src[si++];
+                int b1 = src[si++];
+                int offset = (b0 | ((b1 >> 4) << 8)) + 1;
+                int length = (b1 & 0x0F) + LZ_MIN_MATCH;
+                if (di - offset < 0 || di + length > dmax) return -1;
+                for (int k = 0; k < length; k++)
+                    dst[di + k] = dst[di - offset + k];
+                di += length;
+            } else {
+                /* Literal */
+                if (si >= slen) goto done;
+                if (di >= dmax) return -1;
+                dst[di++] = src[si++];
+            }
+        }
+    }
+done:
+    return di;
+}
+
+/* ============================================
+ * Save slot management (v2 with compression, v1 backward compat)
+ *
+ * v2 per-slot layout in PSRAM (128KB):
+ *   [0]  magic "PD2C" (compressed) or "PD2R" (raw)
+ *   [4]  game_id
+ *   [8]  compressed_size  (== uncomp_size if raw)
+ *   [12] uncompressed_size
+ *   [16] data (compressed or raw)
+ *
+ * v1 per-slot layout (old 64KB format, read-only for migration):
+ *   [0]  game_id
+ *   [4]  size
+ *   [8]  data (uncompressed)
+ * ============================================ */
 #define SYS_DISPLAY_MODE_F (*(volatile uint32_t *)0x4000000C)
+
+/* Detect v2 magic at slot start */
+static int sav_is_v2(volatile uint8_t *slot) {
+    return slot[0] == 'P' && slot[1] == 'D' && slot[2] == '2'
+        && (slot[3] == 'C' || slot[3] == 'R');
+}
+
+/* Read game_id stored in a PSRAM slot header (v1 or v2) */
+static uint32_t sav_slot_game_id(volatile uint8_t *slot) {
+    volatile uint32_t *w = (volatile uint32_t *)slot;
+    return sav_is_v2(slot) ? w[1] : w[0];
+}
 
 static int sav_slots_cleared = 0;
 static void sav_clear_incompatible(void) {
     if (sav_slots_cleared) return;
     sav_slots_cleared = 1;
 
-    uint32_t game_id = SYS_GAME_ID;
-    if (game_id == 0) return;  /* No game ID set, skip */
+    uint32_t my_id = sav_get_game_id();
+    if (my_id == 0) return;
 
     for (int i = 0; i < SAV_SLOT_COUNT; i++) {
-        uint32_t slot_offset = (uint32_t)i * SAV_SLOT_SIZE;
-        volatile uint32_t *uc = (volatile uint32_t *)(SAV_REGION_UC + slot_offset);
-        uint32_t stored_id = uc[0];
+        volatile uint8_t *slot = SAV_REGION_UC + (uint32_t)i * SAV_SLOT_SIZE;
+        uint32_t stored_id = sav_slot_game_id(slot);
 
-        /* Skip empty slots and slots that match */
-        if (stored_id == 0 || stored_id == 0xFFFFFFFF || stored_id == game_id)
+        if (stored_id == 0 || stored_id == 0xFFFFFFFF || stored_id == my_id)
             continue;
 
-        /* Erase the entire slot — bridge will save zeros at shutdown */
-        volatile uint8_t *dst = SAV_REGION_UC + slot_offset;
+        /* Erase mismatched slot */
         for (uint32_t j = 0; j < SAV_SLOT_SIZE; j++)
-            dst[j] = 0;
+            slot[j] = 0;
     }
 }
 
-/* Read save data from nonvolatile SDRAM region into sav_buf.
- * slot_idx: save slot index (0-5), maps to data slots 10-15.
- * Layout per slot: [4-byte game_id] [4-byte size] [data]
- * Returns saved_size on success, 0 on empty/incompatible. */
+/* Read save data from PSRAM slot into sav_buf (decompressing if v2).
+ * Returns uncompressed size on success, 0 on empty/incompatible. */
 static uint32_t sav_read_from_slot(int slot_idx) {
-    sav_clear_incompatible();  /* Erase mismatched slots on first access */
+    sav_clear_incompatible();
 
-    uint32_t slot_offset = (uint32_t)slot_idx * SAV_SLOT_SIZE;
-    volatile uint32_t *uc = (volatile uint32_t *)(SAV_REGION_UC + slot_offset);
+    volatile uint8_t *slot = SAV_REGION_UC + (uint32_t)slot_idx * SAV_SLOT_SIZE;
+    uint32_t my_id = sav_get_game_id();
 
-    /* Check game ID tag — reject saves from a different game */
-    uint32_t game_id = SYS_GAME_ID;
-    uint32_t stored_id = uc[0];
+    if (sav_is_v2(slot)) {
+        /* v2 format */
+        volatile uint32_t *hdr = (volatile uint32_t *)slot;
+        uint32_t game_id     = hdr[1];
+        uint32_t comp_size   = hdr[2];
+        uint32_t uncomp_size = hdr[3];
 
-    if (game_id != 0 && stored_id != game_id)
+        if (my_id != 0 && game_id != my_id)
+            return 0;
+        if (uncomp_size == 0 || uncomp_size > SAV_BUF_SIZE)
+            return 0;
+        if (comp_size == 0 || comp_size > (SAV_SLOT_SIZE - SAV_V2_HEADER_SIZE))
+            return 0;
+
+        memset(sav_buf, 0, SAV_BUF_SIZE);
+
+        if (slot[3] == 'C') {
+            /* Compressed — decompress from PSRAM to sav_buf */
+            int result = sav_decompress(slot + SAV_V2_HEADER_SIZE, (int)comp_size,
+                                        (uint8_t *)sav_buf, (int)uncomp_size);
+            if (result < 0 || (uint32_t)result != uncomp_size)
+                return 0;
+        } else {
+            /* Raw (PD2R) — copy directly */
+            volatile uint8_t *src = slot + SAV_V2_HEADER_SIZE;
+            for (uint32_t i = 0; i < uncomp_size; i++)
+                ((uint8_t *)sav_buf)[i] = src[i];
+        }
+        return uncomp_size;
+    }
+
+    /* v1 format (backward compat): [game_id][size][data] */
+    volatile uint32_t *hdr = (volatile uint32_t *)slot;
+    uint32_t game_id   = hdr[0];
+    uint32_t saved_size = hdr[1];
+
+    if (my_id != 0 && game_id != my_id)
+        return 0;
+    if (saved_size == 0 || saved_size == 0xFFFFFFFF || saved_size > SAV_V1_MAX_DATA)
         return 0;
 
-    /* Read size from second word */
-    uint32_t saved_size = uc[1];
-    if (saved_size == 0 || saved_size == 0xFFFFFFFF ||
-        saved_size > (SAV_SLOT_SIZE - SAV_HEADER_SIZE))
-        return 0;
-
-    /* Copy data (after header) to sav_buf */
     memset(sav_buf, 0, SAV_BUF_SIZE);
-    volatile uint8_t *src = SAV_REGION_UC + slot_offset + SAV_HEADER_SIZE;
+    volatile uint8_t *src = slot + SAV_V1_HEADER_SIZE;
     for (uint32_t i = 0; i < saved_size; i++)
         ((uint8_t *)sav_buf)[i] = src[i];
 
@@ -230,21 +434,44 @@ static void flush_dcache(void) {
     (void)sink;
 }
 
-/* Write sav_buf to CRAM1 (bridge reads CRAM1 directly at shutdown).
- * slot_idx: save slot index (0-5).
- * actual_size: number of bytes of data in sav_buf. */
+/* Compress sav_buf and write to PSRAM slot (v2 format).
+ * Tries LZSS first; falls back to raw if compression doesn't help
+ * or if data fits uncompressed. */
 static void sav_persist(int slot_idx, uint32_t actual_size) {
-    uint32_t slot_offset = (uint32_t)slot_idx * SAV_SLOT_SIZE;
+    volatile uint8_t *slot = SAV_REGION_UC + (uint32_t)slot_idx * SAV_SLOT_SIZE;
+    volatile uint32_t *hdr = (volatile uint32_t *)slot;
+    uint32_t data_max = SAV_SLOT_SIZE - SAV_V2_HEADER_SIZE;
+    uint32_t my_id = sav_get_game_id();
 
-    /* Write game ID tag + size + data to CRAM1 (uncached) */
-    volatile uint32_t *hdr = (volatile uint32_t *)(SAV_REGION_UC + slot_offset);
-    hdr[0] = SYS_GAME_ID;    /* game ID tag */
-    hdr[1] = actual_size;     /* data size */
+    /* Try compression */
+    int comp_size = sav_compress((const uint8_t *)sav_buf, (int)actual_size,
+                                 slot + SAV_V2_HEADER_SIZE, (int)data_max);
 
-    volatile uint8_t *dst = SAV_REGION_UC + slot_offset + SAV_HEADER_SIZE;
-    for (uint32_t i = 0; i < actual_size; i++)
-        dst[i] = ((uint8_t *)sav_buf)[i];
-
+    if (comp_size > 0 && (uint32_t)comp_size < actual_size) {
+        /* Compressed and smaller — write PD2C header */
+        slot[0] = 'P'; slot[1] = 'D'; slot[2] = '2'; slot[3] = 'C';
+        hdr[1] = my_id;
+        hdr[2] = (uint32_t)comp_size;
+        hdr[3] = actual_size;
+    } else if (actual_size <= data_max) {
+        /* Store raw (compression didn't help) — write PD2R header */
+        slot[0] = 'P'; slot[1] = 'D'; slot[2] = '2'; slot[3] = 'R';
+        hdr[1] = my_id;
+        hdr[2] = actual_size;
+        hdr[3] = actual_size;
+        volatile uint8_t *dst = slot + SAV_V2_HEADER_SIZE;
+        for (uint32_t i = 0; i < actual_size; i++)
+            dst[i] = ((uint8_t *)sav_buf)[i];
+    } else {
+        /* Data too large even uncompressed — truncate as last resort */
+        slot[0] = 'P'; slot[1] = 'D'; slot[2] = '2'; slot[3] = 'R';
+        hdr[1] = my_id;
+        hdr[2] = data_max;
+        hdr[3] = data_max;
+        volatile uint8_t *dst = slot + SAV_V2_HEADER_SIZE;
+        for (uint32_t i = 0; i < data_max; i++)
+            dst[i] = ((uint8_t *)sav_buf)[i];
+    }
 }
 
 
@@ -873,7 +1100,7 @@ int open(const char *pathname, int flags, ...) {
             /* Write mode: prepare sav_buf for writing */
             memset(sav_buf, 0, SAV_BUF_SIZE);
             sav_fd_offset = 0;
-            sav_fd_size = SAV_SLOT_SIZE - SAV_HEADER_SIZE;
+            sav_fd_size = SAV_BUF_SIZE;
             sav_fd_writing = 1;
             sav_fd_sub_idx = sub_idx;
             sav_write_sub_idx = sub_idx;

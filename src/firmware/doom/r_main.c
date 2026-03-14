@@ -158,7 +158,7 @@ R_AddPointToBox
 //  check point against partition plane.
 // Returns side 0 (front) or 1 (back).
 //
-int
+PD_FASTTEXT int
 R_PointOnSide
 ( fixed_t       x,
   fixed_t       y,
@@ -288,7 +288,7 @@ R_PointOnSegSide
 
 
 
-angle_t
+PD_FASTTEXT angle_t
 R_PointToAngle
 ( fixed_t       x,
   fixed_t       y )
@@ -450,7 +450,7 @@ void R_InitPointToAngle (void)
 //  at the given angle.
 // rw_distance must be calculated first.
 //
-fixed_t R_ScaleFromGlobalAngle (angle_t visangle)
+PD_FASTTEXT fixed_t R_ScaleFromGlobalAngle (angle_t visangle)
 {
     fixed_t             scale;
     int                 anglea;
@@ -869,6 +869,10 @@ void R_SetupFrame (player_t* player)
 //
 void R_RenderPlayerView (player_t* player)
 {
+    /* Advance OPL2 music between rendering passes so notes don't
+     * sustain/stutter when a complex frame takes a long time. */
+    extern void OPL_AdvanceMusic(void);
+
     R_SetupFrame (player);
 
     // Clear buffers.
@@ -876,6 +880,7 @@ void R_RenderPlayerView (player_t* player)
     R_ClearDrawSegs ();
     R_ClearPlanes ();
     R_ClearSprites ();
+    R_InvalidateColumnCache ();
 
     // check for new console commands.
     NetUpdate ();
@@ -883,15 +888,21 @@ void R_RenderPlayerView (player_t* player)
     // The head node is the last node output.
     R_RenderBSPNode (numnodes-1);
 
+    OPL_AdvanceMusic ();
+
     // Check for new console commands.
     NetUpdate ();
 
     R_DrawPlanes ();
 
+    OPL_AdvanceMusic ();
+
     // Check for new console commands.
     NetUpdate ();
 
     R_DrawMasked ();
+
+    OPL_AdvanceMusic ();
 
     // Check for new console commands.
     NetUpdate ();

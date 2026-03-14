@@ -1512,7 +1512,7 @@ assign cpu_psram_rdata_valid = cpu_on_bank0 ? psram_mux_rdata_valid : psram1_rda
 always @(posedge clk_74a) begin
     datatable_wren <= 1;
     datatable_addr <= 5 * 2 + 1;    // slot index 5, size entry
-    datatable_data <= 32'h10000;    // 64KB (matches data.json size_maximum)
+    datatable_data <= 32'h060000;   // 384KB = 6 × 64KB (matches data.json size_maximum)
 end
 
 core_bridge_cmd icb (

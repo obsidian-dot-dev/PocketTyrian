@@ -120,7 +120,7 @@ PD_FASTTEXT void R_DrawColumn (void)
         I_Error ("R_DrawColumn: %i to %i at %i", dc_yl, dc_yh, dc_x);
 #endif
 
-    // Framebuffer destination address.
+    // Framebuffer destination address (uncached to avoid D-cache pollution).
     dest = screens[0] + (viewwindowy + dc_yl) * SCREENWIDTH + (viewwindowx + dc_x);
 
     // Determine scaling,
@@ -128,14 +128,18 @@ PD_FASTTEXT void R_DrawColumn (void)
     fracstep = dc_iscale;
     frac = dc_texturemid + (dc_yl-centery)*fracstep;
 
+    // Cache globals in locals so the compiler keeps them in registers.
+    // Without this, *dest write forces reload of dc_source/dc_colormap
+    // every pixel (aliasing) — 2 extra memory loads per iteration.
+    const byte *source = dc_source;
+    const lighttable_t *colormap = dc_colormap;
+
     // Inner loop that does the actual texture mapping,
     //  e.g. a DDA-lile scaling.
     // This is as fast as it gets.
     do
     {
-        // Re-map color indices from wall texture column
-        //  using a lighting/special effects LUT.
-        *dest = dc_colormap[dc_source[(frac>>FRACBITS)&127]];
+        *dest = colormap[source[(frac>>FRACBITS)&127]];
 
         dest += SCREENWIDTH;
         frac += fracstep;
@@ -144,8 +148,42 @@ PD_FASTTEXT void R_DrawColumn (void)
 }
 
 
+//
+// R_DrawSkyColumn
+// Specialized sky column drawer — sky is always fullbright so
+// colormaps[0] is the identity map.  Skipping the colormap
+// indirection saves one SDRAM read per pixel.
+//
+PD_FASTTEXT void R_DrawSkyColumn (void)
+{
+    int                 count;
+    byte*               dest;
+    fixed_t             frac;
+    fixed_t             fracstep;
 
-void R_DrawColumnLow (void)
+    count = dc_yh - dc_yl;
+    if (count < 0)
+        return;
+
+    dest = screens[0] + (viewwindowy + dc_yl) * SCREENWIDTH + (viewwindowx + dc_x);
+
+    fracstep = dc_iscale;
+    frac = dc_texturemid + (dc_yl-centery)*fracstep;
+
+    const byte *source = dc_source;
+
+    do
+    {
+        *dest = source[(frac>>FRACBITS)&127];
+
+        dest += SCREENWIDTH;
+        frac += fracstep;
+
+    } while (count--);
+}
+
+
+PD_FASTTEXT void R_DrawColumnLow (void)
 {
     int                 count;
     byte*               dest;
@@ -219,7 +257,7 @@ int     fuzzpos = 0;
 //  could create the SHADOW effect,
 //  i.e. spectres and invisible players.
 //
-void R_DrawFuzzColumn (void)
+PD_FASTTEXT void R_DrawFuzzColumn (void)
 {
     int                 count;
     byte*               dest;
@@ -283,18 +321,13 @@ void R_DrawFuzzColumn (void)
     fracstep = dc_iscale;
     frac = dc_texturemid + (dc_yl-centery)*fracstep;
 
-    // Looks like an attempt at dithering,
-    //  using the colormap #6 (of 0-31, a bit
-    //  brighter than average).
+    // Cache colormap pointer to avoid reloading global each pixel.
+    const lighttable_t *fuzzmap = colormaps + 6*256;
+
     do
     {
-        // Lookup framebuffer, and retrieve
-        //  a pixel that is either one column
-        //  left or right of the current one.
-        // Add index from colormap to index.
-        *dest = colormaps[6*256+dest[fuzzoffset[fuzzpos]]];
+        *dest = fuzzmap[dest[fuzzoffset[fuzzpos]]];
 
-        // Clamp table lookup index.
         if (++fuzzpos == FUZZTABLE)
             fuzzpos = 0;
 
@@ -319,7 +352,7 @@ void R_DrawFuzzColumn (void)
 byte*   dc_translation;
 byte*   translationtables;
 
-void R_DrawTranslatedColumn (void)
+PD_FASTTEXT void R_DrawTranslatedColumn (void)
 {
     int                 count;
     byte*               dest;
@@ -483,6 +516,12 @@ PD_FASTTEXT void R_DrawSpan (void)
     // We do not check for zero spans here?
     count = ds_x2 - ds_x1;
 
+    // Cache globals in locals — same aliasing fix as R_DrawColumn.
+    const byte *source = ds_source;
+    const lighttable_t *colormap = ds_colormap;
+    fixed_t xstep = ds_xstep;
+    fixed_t ystep = ds_ystep;
+
     do
     {
         // Current texture index in u,v.
@@ -490,11 +529,11 @@ PD_FASTTEXT void R_DrawSpan (void)
 
         // Lookup pixel from flat texture tile,
         //  re-index using light/colormap.
-        *dest++ = ds_colormap[ds_source[spot]];
+        *dest++ = colormap[source[spot]];
 
         // Next step in u,v.
-        xfrac += ds_xstep;
-        yfrac += ds_ystep;
+        xfrac += xstep;
+        yfrac += ystep;
 
     } while (count--);
 }
@@ -504,7 +543,7 @@ PD_FASTTEXT void R_DrawSpan (void)
 //
 // Again..
 //
-void R_DrawSpanLow (void)
+PD_FASTTEXT void R_DrawSpanLow (void)
 {
     fixed_t             xfrac;
     fixed_t             yfrac;

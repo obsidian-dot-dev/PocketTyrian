@@ -96,7 +96,7 @@ short*          maskedtexturecol;
 //
 // R_RenderMaskedSegRange
 //
-void
+PD_FASTTEXT void
 R_RenderMaskedSegRange
 ( drawseg_t*    ds,
   int           x1,
@@ -200,7 +200,7 @@ R_RenderMaskedSegRange
 #define HEIGHTBITS              12
 #define HEIGHTUNIT              (1<<HEIGHTBITS)
 
-void R_RenderSegLoop (void)
+PD_FASTTEXT void R_RenderSegLoop (void)
 {
     angle_t             angle;
     unsigned            index;
@@ -368,7 +368,7 @@ void R_RenderSegLoop (void)
 // A wall segment will be drawn
 //  between start and stop pixels (inclusive).
 //
-void
+PD_FASTTEXT void
 R_StoreWallRange
 ( int   start,
   int   stop )

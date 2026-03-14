@@ -256,7 +256,7 @@ void R_ClearClipSegs (void)
 // Clips the given segment
 // and adds any visible pieces to the line list.
 //
-void R_AddLine (seg_t*  line)
+PD_FASTTEXT void R_AddLine (seg_t*  line)
 {
     int                 x1;
     int                 x2;
@@ -378,7 +378,7 @@ int     checkcoord[12][4] =
 };
 
 
-boolean R_CheckBBox (fixed_t*   bspcoord)
+PD_FASTTEXT boolean R_CheckBBox (fixed_t*   bspcoord)
 {
     int                 boxx;
     int                 boxy;
@@ -494,11 +494,12 @@ boolean R_CheckBBox (fixed_t*   bspcoord)
 // Add sprites of things in sector.
 // Draw one or more line segments.
 //
-void R_Subsector (int num)
+PD_FASTTEXT void R_Subsector (int num)
 {
     int                 count;
     seg_t*              line;
     subsector_t*        sub;
+    extern void OPL_AdvanceMusic(void);
 
 #ifdef RANGECHECK
     if (num>=numsubsectors)
@@ -506,6 +507,8 @@ void R_Subsector (int num)
                  num,
                  numsubsectors);
 #endif
+
+    OPL_AdvanceMusic ();
 
     sscount++;
     sub = &subsectors[num];
@@ -549,7 +552,7 @@ void R_Subsector (int num)
 // Renders all subsectors below a given node,
 //  traversing subtree recursively.
 // Just call with BSP root.
-void R_RenderBSPNode (int bspnum)
+PD_FASTTEXT void R_RenderBSPNode (int bspnum)
 {
     node_t*     bsp;
     int         side;

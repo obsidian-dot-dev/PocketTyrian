@@ -232,7 +232,7 @@ void R_InitSpriteDefs (char** namelist)
                 {
                     frame = lumpinfo[l].name[6] - 'A';
                     rotation = lumpinfo[l].name[7] - '0';
-                    R_InstallSpriteLump (l, frame, rotation, true);
+                    R_InstallSpriteLump (patched, frame, rotation, true);
                 }
             }
         }
@@ -348,7 +348,7 @@ short*          mceilingclip;
 fixed_t         spryscale;
 fixed_t         sprtopscreen;
 
-void R_DrawMaskedColumn (column_t* column)
+PD_FASTTEXT void R_DrawMaskedColumn (column_t* column)
 {
     int         topscreen;
     int         bottomscreen;
@@ -509,12 +509,12 @@ void R_ProjectSprite (mobj_t* thing)
                  thing->sprite);
 #endif
     sprdef = &sprites[thing->sprite];
-#ifdef RANGECHECK
-    if ( (thing->frame&FF_FRAMEMASK) >= sprdef->numframes )
-        I_Error ("R_ProjectSprite: invalid sprite frame %i : %i ",
-                 thing->sprite, thing->frame);
-#endif
-    sprframe = &sprdef->spriteframes[ thing->frame & FF_FRAMEMASK];
+    {
+        int f = thing->frame & FF_FRAMEMASK;
+        if (f >= sprdef->numframes)
+            return;  /* PWAD may have fewer frames — skip rather than crash */
+        sprframe = &sprdef->spriteframes[f];
+    }
 
     if (sprframe->rotate)
     {
@@ -662,12 +662,12 @@ void R_DrawPSprite (pspdef_t* psp)
                  psp->state->sprite);
 #endif
     sprdef = &sprites[psp->state->sprite];
-#ifdef RANGECHECK
-    if ( (psp->state->frame & FF_FRAMEMASK)  >= sprdef->numframes)
-        I_Error ("R_ProjectSprite: invalid sprite frame %i : %i ",
-                 psp->state->sprite, psp->state->frame);
-#endif
-    sprframe = &sprdef->spriteframes[ psp->state->frame & FF_FRAMEMASK ];
+    {
+        int f = psp->state->frame & FF_FRAMEMASK;
+        if (f >= sprdef->numframes)
+            return;  /* PWAD may have fewer frames — skip rather than crash */
+        sprframe = &sprdef->spriteframes[f];
+    }
 
     lump = sprframe->lump[0];
     flip = (boolean)sprframe->flip[0];
@@ -839,7 +839,7 @@ void R_SortVisSprites (void)
 //
 // R_DrawSprite
 //
-void R_DrawSprite (vissprite_t* spr)
+PD_FASTTEXT void R_DrawSprite (vissprite_t* spr)
 {
     drawseg_t*          ds;
     short               clipbot[SCREENWIDTH];
@@ -955,7 +955,7 @@ void R_DrawSprite (vissprite_t* spr)
 //
 // R_DrawMasked
 //
-void R_DrawMasked (void)
+PD_FASTTEXT void R_DrawMasked (void)
 {
     vissprite_t*        spr;
     drawseg_t*          ds;
