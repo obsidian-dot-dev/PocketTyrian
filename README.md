@@ -41,7 +41,7 @@ You will need the original Tyrian v2.1 DOS data files. These are legally availab
    ```bash
    python3 bundle_rom.py /path/to/extracted/tyrian21 tyriam.rom
    ```
-5. Copy the resulting `tyrian.rom` into your `Assets/tyrian/obsidian.PocketTyrian/` folder on your Analogue Pocket's SD Card.
+5. Copy the resulting `tyrian.rom` into your `Assets/tyrian/common/` folder on your Analogue Pocket's SD Card.
 
 ##Building from Source
 
