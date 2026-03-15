@@ -145,8 +145,8 @@ int handle_misaligned(trap_frame_t *frame) {
     /* Debug: print first few traps */
     misaligned_count++;
     if (misaligned_count <= 5) {
-        term_printf("T#%d mc=%x pc=%x i=%x\n",
-                    misaligned_count, mcause, frame->mepc, instr);
+        // Silenced to prevent cluttering the loading screen UI
+        // term_printf("T#%d mc=%x pc=%x i=%x\n", misaligned_count, mcause, frame->mepc, instr);
     }
 
     /* Handle based on opcode (trust the instruction, not just mcause) */

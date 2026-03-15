@@ -115,10 +115,7 @@ void term_putdec(int32_t val) {
     }
 }
 
-void term_printf(const char *fmt, ...) {
-    va_list args;
-    va_start(args, fmt);
-
+void vterm_printf(const char *fmt, va_list args) {
     while (*fmt) {
         if (*fmt == '%') {
             fmt++;
@@ -162,11 +159,9 @@ void term_printf(const char *fmt, ...) {
                 case 'X': {
                     uint32_t val = va_arg(args, uint32_t);
                     if (width == 0) {
-                        /* Default: print all significant digits, minimum 1 */
                         if (val == 0) {
                             width = 1;
                         } else {
-                            /* Count digits needed */
                             uint32_t tmp = val;
                             width = 0;
                             while (tmp) {
@@ -201,6 +196,11 @@ void term_printf(const char *fmt, ...) {
         }
         fmt++;
     }
+}
 
+void term_printf(const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    vterm_printf(fmt, args);
     va_end(args);
 }

@@ -198,9 +198,20 @@ void *memcpy(void *dest, const void *src, size_t n) {
     const uint8_t *s = (const uint8_t *)src;
 
     /* Word-aligned copy for better performance */
-    if (((uintptr_t)d & 3) == 0 && ((uintptr_t)s & 3) == 0) {
+    if ((((uintptr_t)d | (uintptr_t)s) & 3) == 0) {
         uint32_t *d32 = (uint32_t *)d;
         const uint32_t *s32 = (const uint32_t *)s;
+
+        /* Unroll loop for large blocks */
+        while (n >= 16) {
+            d32[0] = s32[0];
+            d32[1] = s32[1];
+            d32[2] = s32[2];
+            d32[3] = s32[3];
+            d32 += 4;
+            s32 += 4;
+            n -= 16;
+        }
 
         while (n >= 4) {
             *d32++ = *s32++;
@@ -228,6 +239,16 @@ void *memset(void *s, int c, size_t n) {
     if (((uintptr_t)p & 3) == 0) {
         uint32_t val32 = val | (val << 8) | (val << 16) | (val << 24);
         uint32_t *p32 = (uint32_t *)p;
+
+        /* Unroll loop for large blocks */
+        while (n >= 16) {
+            p32[0] = val32;
+            p32[1] = val32;
+            p32[2] = val32;
+            p32[3] = val32;
+            p32 += 4;
+            n -= 16;
+        }
 
         while (n >= 4) {
             *p32++ = val32;
@@ -262,6 +283,29 @@ void *memmove(void *dest, const void *src, size_t n) {
     /* If dest is after src, copy backward */
     d += n;
     s += n;
+
+    if ((((uintptr_t)d | (uintptr_t)s) & 3) == 0) {
+        uint32_t *d32 = (uint32_t *)d;
+        const uint32_t *s32 = (const uint32_t *)s;
+
+        while (n >= 16) {
+            d32 -= 4;
+            s32 -= 4;
+            d32[3] = s32[3];
+            d32[2] = s32[2];
+            d32[1] = s32[1];
+            d32[0] = s32[0];
+            n -= 16;
+        }
+
+        while (n >= 4) {
+            *--d32 = *--s32;
+            n -= 4;
+        }
+
+        d = (uint8_t *)d32;
+        s = (const uint8_t *)s32;
+    }
 
     while (n > 0) {
         *--d = *--s;

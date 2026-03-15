@@ -86,7 +86,7 @@ int dataslot_wait_complete(void);
  * The file path is relative to the Assets directory.
  * Returns 0 on success, negative on error.
  */
-int dataslot_open_file(uint16_t slot_id, const char *filename, uint32_t flags, uint32_t size);
+int dataslot_open_file(const char *filename, uint32_t flags, uint32_t size);
 
 /*
  * Read data from a data slot into SDRAM.

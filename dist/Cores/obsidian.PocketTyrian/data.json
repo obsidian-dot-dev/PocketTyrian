@@ -1,0 +1,33 @@
+{
+    "data": {
+        "magic": "APF_VER_1",
+        "data_slots": [
+            {
+                "id": 1,
+                "name": "firmware",
+                "filename": "tyrian.bin",
+                "required": true,
+                "parameters": 2,                
+                "deferload": true
+            },
+            {
+                "id": 0,
+                "name": "game data",
+                "filename": "tyrian.rom",
+                "required": true,
+                "parameters": 2,
+                "deferload": true
+            },
+            {
+                "id": 5,
+                "name": "save data",
+                "filename": "tyrian.sav",
+                "required": false,
+                "parameters": "0x80",
+                "nonvolatile": true,
+                "address": "0x30000000",
+                "size_maximum": "0x00010000"
+            }
+        ]
+    }
+}

@@ -11,7 +11,7 @@
 
 // Terminal dimensions
 #define TERM_COLS 40
-#define TERM_ROWS 30
+#define TERM_ROWS 25
 #define TERM_SIZE (TERM_COLS * TERM_ROWS)
 
 // Initialize terminal (clear screen, reset cursor)
@@ -38,6 +38,7 @@ void term_println(const char *s);
 // Printf-style formatted output
 // Supports: %d, %u, %x, %X, %s, %c, %%, and width specifiers for hex (e.g., %08X)
 void term_printf(const char *fmt, ...);
+void vterm_printf(const char *fmt, va_list args);
 
 // Write hex number (useful for debugging)
 void term_puthex(uint32_t val, int digits);
@@ -46,6 +47,8 @@ void term_puthex(uint32_t val, int digits);
 void term_putdec(int32_t val);
 
 // Convenience: allow using printf() syntax (maps to term_printf)
+#ifndef printf
 #define printf term_printf
+#endif
 
 #endif

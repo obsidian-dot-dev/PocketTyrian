@@ -121,7 +121,21 @@ struct timespec {
 #define CLOCK_REALTIME  0
 #define CLOCK_MONOTONIC 1
 
+struct tm {
+    int tm_sec;
+    int tm_min;
+    int tm_hour;
+    int tm_mday;
+    int tm_mon;
+    int tm_year;
+    int tm_wday;
+    int tm_yday;
+    int tm_isdst;
+};
+
 time_t time(time_t *tloc);
+struct tm *localtime(const time_t *timep);
+char *ctime(const time_t *timep);
 int clock_gettime(int clk_id, struct timespec *tp);
 
 /* ============================================
@@ -226,6 +240,10 @@ int sscanf(const char *str, const char *format, ...);
 int fscanf(FILE *stream, const char *format, ...);
 int fgetc(FILE *stream);
 int getc(FILE *stream);
+int fputc(int c, FILE *stream);
+int fputs(const char *s, FILE *stream);
+int mkdir(const char *pathname, int mode);
+char *getenv(const char *name);
 int unlink(const char *pathname);
 ssize_t write(int fd, const void *buf, size_t count);
 void setbuf(FILE *stream, char *buf);

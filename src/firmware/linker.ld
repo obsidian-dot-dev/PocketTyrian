@@ -1,56 +1,58 @@
 /*
- * Linker script for PocketDoom on Analogue Pocket
+ * Linker script for Tyrian on Analogue Pocket
  *
  * Two-stage boot:
  * - Bootloader: 64KB BRAM at 0x00000000 (initialized from firmware.mif)
- * - Doom binary: loaded via deferload to SDRAM at 0x10200000, executes in place
- * - WAD data: loaded via deferload to SDRAM at 0x10C00000
- *
- * Memory layout:
- * - BRAM:     0x00000000 (64KB)  - Bootloader code, stack, hot functions
- * - SDRAM:    0x10000000 (64MB)
- *   - 0x10000000: Framebuffer 0 (320x240, 8-bit indexed)
- *   - 0x10100000: Framebuffer 1 (double buffer)
- *   - 0x10200000: doom.bin code + rodata + data (execute in place from SDRAM)
- *   - After code: BSS + Heap + Stack (WAD loaded on-demand via dataslot)
- * - Terminal: 0x20000000 (8KB)   - Character VRAM
- * - SysRegs:  0x40000000         - System control registers
+ * - Engine binary: loaded via deferload to SDRAM at 0x10200000, executes in place
  */
 
 ENTRY(_start)
 
 MEMORY {
     BRAM      (rwx) : ORIGIN = 0x00000000, LENGTH = 64K
-    SDRAM     (rwx) : ORIGIN = 0x10200000, LENGTH = 48M    /* Doom code + BSS + Heap (WAD loaded on-demand) */
+    SDRAM     (rwx) : ORIGIN = 0x10200000, LENGTH = 48M
 }
 
 /* SDRAM layout symbols */
 __sdram_base = 0x10000000;
 __sdram_size = 64M;
 
-/* Doom binary: VMA = LMA in SDRAM (execute in place, no copy needed) */
+/* Engine binary: VMA = LMA in SDRAM (execute in place, no copy needed) */
 __doom_entry = 0x10200000;
 
 SECTIONS {
+    /* Global pointer for relaxation */
+    . = ALIGN(4);
+    PROVIDE(__global_pointer$ = . + 0x800);
+
     /* Bootloader code - in BRAM, runs at startup */
     .boot : {
         KEEP(*(.text.start))       /* Startup code first */
         *(.text.boot*)             /* Bootloader functions */
-        terminal.o(.text*)         /* Terminal functions for boot diagnostics */
-        terminal.o(.rodata*)
-        terminal.o(.srodata*)
-        dataslot.o(.text*)         /* Dataslot functions for loading */
-        dataslot.o(.rodata*)
-        dataslot.o(.srodata*)
-        main.o(.srodata*)          /* Boot test float constants */
+        *terminal.o(.text*)
+        *dataslot.o(.text*)
+        *main.o(.text*)
+        *misaligned.o(.text*)
         *(.rodata.boot*)
+        *terminal.o(.rodata*)
+        *dataslot.o(.rodata*)
+        *main.o(.rodata*)
+        *misaligned.o(.rodata*)
         . = ALIGN(4);
     } > BRAM
 
     /* Bootloader data */
     .boot_data : {
         *(.data.boot*)
+        *terminal.o(.data*)
+        *dataslot.o(.data*)
+        *main.o(.data*)
+        *misaligned.o(.data*)
         *(.sdata.boot*)
+        *terminal.o(.sdata*)
+        *dataslot.o(.sdata*)
+        *main.o(.sdata*)
+        *misaligned.o(.sdata*)
         . = ALIGN(4);
     } > BRAM
 
@@ -59,13 +61,21 @@ SECTIONS {
         . = ALIGN(4);
         __bss_start = .;
         *(.bss.boot*)
+        *terminal.o(.bss*)
+        *dataslot.o(.bss*)
+        *main.o(.bss*)
+        *misaligned.o(.bss*)
         *(.sbss.boot*)
+        *terminal.o(.sbss*)
+        *dataslot.o(.sbss*)
+        *main.o(.sbss*)
+        *misaligned.o(.sbss*)
+        *(COMMON.boot)
         . = ALIGN(4);
         __bss_end = .;
     } > BRAM
 
-    /* Hot code/data pinned in BRAM for lower latency.
-     * Included in boot image generation (firmware.mif). */
+    /* Hot code/data pinned in BRAM for lower latency. */
     .fasttext : {
         . = ALIGN(4);
         __fasttext_start = .;
@@ -83,19 +93,20 @@ SECTIONS {
         __fastdata_end = .;
     } > BRAM
 
-    /* === SDRAM sections: Doom code executes in place from SDRAM === */
+    /* === SDRAM sections === */
 
-    /* Doom code section - VMA = LMA in SDRAM (no copy needed) */
+    /* Engine code section */
     .text __doom_entry : {
         __text_start = .;
-        KEEP(*(.text*))        /* All code (except boot) - KEEP to prevent gc */
-        KEEP(*(.rodata*))      /* Read-only data */
-        KEEP(*(.srodata*))     /* Small read-only data (float constants) */
+        KEEP(*(.text.entry))   /* Force tyrian_main entry to 0x10200000 */
+        KEEP(*(.text*))
+        KEEP(*(.rodata*))
+        KEEP(*(.srodata*))
         . = ALIGN(4);
         __text_end = .;
     } > SDRAM
 
-    /* Doom initialized data - contiguous with .text in SDRAM */
+    /* Initialized data */
     .data : {
         __data_start = .;
         KEEP(*(.data*))
@@ -104,11 +115,11 @@ SECTIONS {
         __data_end = .;
     } > SDRAM
 
-    /* doom.bin = .text + .data, loaded by deferload directly to SDRAM */
+    /* Engine copy info for bootloader */
     __doom_load_addr = __doom_entry;
     __doom_copy_size = __data_end - __text_start;
 
-    /* Doom uninitialized data (BSS) - in SDRAM after code+data */
+    /* Uninitialized data (BSS) */
     .doom_bss : {
         . = ALIGN(4);
         __doom_bss_start = .;
@@ -119,17 +130,15 @@ SECTIONS {
         __doom_bss_end = .;
     } > SDRAM
 
-    /* Heap starts after BSS in SDRAM region.
-     * Reserve a dedicated runtime stack at top of SDRAM to keep game stack
-     * away from BRAM boot code.
-     * Saves live in CRAM1 (bridge 0x30000000) — heap extends to stack. */
+    /* Memory layout */
     __heap_start = __doom_bss_end;
-    __runtime_stack_top = 0x14000000;          /* Near top of 64MB SDRAM */
-    __runtime_stack_size = 512K;               /* 512 KB runtime stack */
+    __romfs_start = 0x11000000;
+    __save_region = 0x13C00000;
+    __runtime_stack_top = 0x13000000;
+    __runtime_stack_size = 512K;
     __runtime_stack_bottom = __runtime_stack_top - __runtime_stack_size;
-    __heap_end = __runtime_stack_bottom;
+    __heap_end = __romfs_start;
 
-    /* Stack at end of BRAM (grows downward) */
     __stack_top = ORIGIN(BRAM) + LENGTH(BRAM);
 
     /* Provide symbols for C code */
