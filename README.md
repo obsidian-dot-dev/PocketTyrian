@@ -39,7 +39,7 @@ You will need the original Tyrian v2.1 DOS data files. These are legally availab
 3. Extract the contents of the ZIP file to a folder on your computer.
 4. Use the provided Python script to pack these files into a single `.rom` file for the Analogue Pocket:
    ```bash
-   python3 bundle_rom.py /path/to/extracted/tyrian21 tyriam.rom
+   python3 bundle_rom.py /path/to/extracted/tyrian21 tyrian.rom
    ```
 5. Copy the resulting `tyrian.rom` into your `Assets/tyrian/obsidian.PocketTyrian/` folder on your Analogue Pocket's SD Card.
 
