@@ -7,7 +7,7 @@
             ],
             "shortname": "PocketTyrian",
             "description": "OpenTyrian on VexRiscv RISC-V CPU",
-            "author": "Obsidian",
+            "author": "obsidian",
             "url": "",
             "version": "0.9.0",
             "date_release": "2026-03-15"
