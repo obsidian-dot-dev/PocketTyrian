@@ -41,9 +41,9 @@ module video_CRT_scanout_indexed_BRAM (
 
     // Video timing parameters
     localparam VID_V_SYNC   = 3;
-    localparam VID_V_BPORCH = 15;
-    localparam VID_V_FPORCH = 4;
-    localparam VID_V_ACTIVE = 240;
+    localparam VID_V_BPORCH = 45;
+    localparam VID_V_FPORCH = 14;
+    localparam VID_V_ACTIVE = 200;
     localparam VID_H_SYNC   = 58;
     localparam VID_H_BPORCH = 62;
     localparam VID_H_FPORCH = 20;
