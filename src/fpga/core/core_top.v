@@ -2066,9 +2066,9 @@ assign video_hs = vidout_hs;
         // ---  CRT 15.7kHz / 60Hz Parameters ---
     localparam CRT_V_TOTAL  = CRT_V_SYNC + CRT_V_BPORCH + CRT_V_ACTIVE + CRT_V_FPORCH;
     localparam CRT_V_SYNC   = 3;
-    localparam CRT_V_BPORCH = 15; //15;
-    localparam CRT_V_FPORCH = 4; //4;
-    localparam CRT_V_ACTIVE = 240;
+    localparam CRT_V_BPORCH = 45; //15;
+    localparam CRT_V_FPORCH = 14; //4;
+    localparam CRT_V_ACTIVE = 200;
     localparam CRT_H_TOTAL  = CRT_H_SYNC + CRT_H_BPORCH + CRT_H_ACTIVE + CRT_H_FPORCH;
     localparam CRT_H_SYNC   = 58;
     localparam CRT_H_BPORCH = 62;
