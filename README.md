@@ -14,6 +14,7 @@ for details on the underlying core.
 *   **Console-Optimized UI:** Tweaked UI to avoid Keyboard input and unnecessary options.
 *   **Save Support:** Persistent config, and storage for 10 saves.
 *   **Gamepad Support:** All inputs are mapped natively to the Pocket's face and shoulder buttons.
+*   **Analogizer Support:** Play on a legit CRT with the [Analogizer](https://analogizer-fpga.com/en)!
 
 ## Controls
 
@@ -81,4 +82,4 @@ This port is technically a fork of [PocketDoom](https://github.com/thinkelastic/
 *   **ThinkElastic / PocketDoom:** For providing the high-quality reference VexRiscv architecture and Analogue OS bridge framework that made this port possible.
 *   **Jotego:** For the `jtopl2` FPGA module used to synthesize the soundtrack.
 *   **Dyreschlock:** For the `tyrian.bin` platform image used for the core.
-
+*   **RndMnkIII:** For adding Analogizer support to the core.
