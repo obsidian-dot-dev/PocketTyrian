@@ -107,7 +107,17 @@ module axi_periph_slave (
 
     // Shutdown handshake
     input wire         shutdown_pending,
-    output reg         shutdown_ack
+    output reg         shutdown_ack,
+
+    // SRAM word interface
+    output reg         sram_rd,
+    output reg         sram_wr,
+    output reg  [21:0] sram_addr,
+    output reg  [31:0] sram_wdata,
+    output reg  [3:0]  sram_wstrb,
+    input  wire [31:0] sram_rdata,
+    input  wire        sram_busy,
+    input  wire        sram_rdata_valid
 );
 
 wire reset = ~reset_n;
@@ -394,9 +404,11 @@ localparam S_PERIPH_WR = 3'd3;
 localparam S_TERM      = 3'd4;
 localparam S_WR_NEXT   = 3'd5;
 localparam S_BRAM_WR   = 3'd6;
-localparam S_OPL_WAIT  = 3'd7;
+localparam S_SRAM_CMD  = 3'd7;
+localparam S_SRAM_DAT  = 4'd8; // Need to increase state width
+localparam S_OPL_WAIT  = 4'd9;
 
-reg [2:0] state;
+reg [3:0] state;
 
 // Latched request fields
 reg [31:0] req_addr;
@@ -408,6 +420,7 @@ reg [7:0]  burst_count;
 
 // Region flags (latched on accept)
 reg reg_ram;
+reg reg_sram;
 reg reg_term;
 reg reg_sysreg;
 reg reg_audio;
@@ -448,6 +461,7 @@ assign ram_wren = (state == S_BRAM_WR) && (|req_wstrb);
 // Region decode helpers
 // ============================================
 wire ar_dec_ram    = (ar_addr[31:16] == 16'b0);
+wire ar_dec_sram   = (ar_addr[31:24] == 8'h32);
 wire ar_dec_term   = (ar_addr[31:13] == 19'h10000);
 wire ar_dec_sysreg = (ar_addr[31:8]  == 24'h400000);
 wire ar_dec_audio  = (ar_addr[31:24] == 8'h4C);
@@ -455,6 +469,7 @@ wire ar_dec_link   = (ar_addr[31:24] == 8'h4D);
 wire ar_dec_opl    = (ar_addr[31:24] == 8'h4E);
 
 wire aw_dec_ram    = (aw_addr[31:16] == 16'b0);
+wire aw_dec_sram   = (aw_addr[31:24] == 8'h32);
 wire aw_dec_term   = (aw_addr[31:13] == 19'h10000);
 wire aw_dec_sysreg = (aw_addr[31:8]  == 24'h400000);
 wire aw_dec_audio  = (aw_addr[31:24] == 8'h4C);
@@ -508,6 +523,12 @@ always @(posedge clk or posedge reset) begin
         opl_write_addr <= 0;
         opl_write_data <= 0;
         opl_req_pending <= 0;
+
+        sram_rd <= 0;
+        sram_wr <= 0;
+        sram_addr <= 0;
+        sram_wdata <= 0;
+        sram_wstrb <= 0;
     end else begin
         // Defaults: deassert single-cycle pulses
         s_axi_arready <= 0;
@@ -519,6 +540,8 @@ always @(posedge clk or posedge reset) begin
         audio_sample_wr <= 0;
         link_reg_wr <= 0;
         link_reg_rd <= 0;
+        sram_rd <= 0;
+        sram_wr <= 0;
 
         // OPL ack clears request
         if (opl_ack) begin
@@ -540,6 +563,7 @@ always @(posedge clk or posedge reset) begin
                 burst_count <= 0;
 
                 reg_ram    <= ar_dec_ram;
+                reg_sram   <= ar_dec_sram;
                 reg_term   <= ar_dec_term;
                 reg_sysreg <= ar_dec_sysreg;
                 reg_audio  <= ar_dec_audio;
@@ -548,6 +572,8 @@ always @(posedge clk or posedge reset) begin
 
                 if (ar_dec_ram)
                     state <= S_BRAM_RD;
+                else if (ar_dec_sram)
+                    state <= S_SRAM_CMD;
                 else if (ar_dec_term)
                     state <= S_TERM;
                 else begin
@@ -566,6 +592,7 @@ always @(posedge clk or posedge reset) begin
                 burst_count <= 0;
 
                 reg_ram    <= aw_dec_ram;
+                reg_sram   <= aw_dec_sram;
                 reg_term   <= aw_dec_term;
                 reg_sysreg <= aw_dec_sysreg;
                 reg_audio  <= aw_dec_audio;
@@ -579,6 +606,8 @@ always @(posedge clk or posedge reset) begin
 
                     if (aw_dec_ram)
                         state <= S_BRAM_WR;
+                    else if (aw_dec_sram)
+                        state <= S_SRAM_CMD;
                     else if (aw_dec_term)
                         state <= S_TERM;
                     else if (aw_dec_opl && |s_axi_wstrb) begin
@@ -711,6 +740,8 @@ always @(posedge clk or posedge reset) begin
 
                 if (reg_ram) begin
                     state <= S_BRAM_WR;
+                end else if (reg_sram) begin
+                    state <= S_SRAM_CMD;
                 end else if (reg_term) begin
                     state <= S_TERM;
                 end else if (reg_opl && |s_axi_wstrb) begin
@@ -731,6 +762,55 @@ always @(posedge clk or posedge reset) begin
                         link_reg_wr <= 1;
                         link_reg_addr <= req_addr[6:2];
                         link_reg_wdata <= s_axi_wdata;
+                    end
+                end
+            end
+        end
+
+        // ============================================
+        // SRAM: Single-word command issue
+        // ============================================
+        S_SRAM_CMD: begin
+            if (!sram_busy) begin
+                sram_rd <= !is_write;
+                sram_wr <= is_write;
+                sram_addr <= req_addr[23:2];
+                sram_wdata <= req_wdata;
+                sram_wstrb <= req_wstrb;
+                state <= S_SRAM_DAT;
+            end
+        end
+
+        // ============================================
+        // SRAM: Wait for word completion
+        // ============================================
+        S_SRAM_DAT: begin
+            if (is_write) begin
+                if (!sram_busy) begin
+                    // Write beat complete
+                    burst_count <= burst_count + 1;
+                    if (beat_is_last) begin
+                        s_axi_bvalid <= 1;
+                        s_axi_bresp <= 2'b00;
+                        state <= S_IDLE;
+                    end else begin
+                        req_addr <= req_addr + 32'd4;
+                        state <= S_WR_NEXT;
+                    end
+                end
+            end else begin
+                if (sram_rdata_valid) begin
+                    // Read beat complete
+                    s_axi_rvalid <= 1;
+                    s_axi_rdata <= sram_rdata;
+                    s_axi_rresp <= 2'b00;
+                    s_axi_rlast <= beat_is_last;
+                    burst_count <= burst_count + 1;
+                    if (beat_is_last) begin
+                        state <= S_IDLE;
+                    end else begin
+                        req_addr <= req_addr + 32'd4;
+                        state <= S_SRAM_CMD;
                     end
                 end
             end

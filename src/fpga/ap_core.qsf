@@ -738,6 +738,8 @@ set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to bridge_spimosi
 
 
 
+set_global_assignment -name VERILOG_FILE core/sram_controller.v
+set_global_assignment -name VERILOG_FILE core/axi_sram_slave.v
 set_global_assignment -name VERILOG_FILE core/jtframe_frac_cen.v
 set_global_assignment -name VERILOG_FILE core/jtframe_resync.v
 set_global_assignment -name VERILOG_FILE core/video_CRT_scanout_indexed_BRAM.v

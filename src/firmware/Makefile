@@ -70,7 +70,7 @@ LDFLAGS = -march=$(ARCH) -mabi=$(ABI) -mno-relax -T linker.ld -nostdlib -nostart
           -Wl,--gc-sections -Wl,-Map=$(TARGET).map
 
 # Tyrian-specific flags
-TYRIAN_CFLAGS = $(COMMON_FLAGS) -O2 -std=gnu11 -fcommon -DNORMALUNIX -DPOCKET_TYRIAN -DNDEBUG -DTYRIAN_DIR=\".\"
+TYRIAN_CFLAGS = $(COMMON_FLAGS) -O3 -funroll-loops -std=gnu11 -fcommon -DNORMALUNIX -DPOCKET_TYRIAN -DNDEBUG -DTYRIAN_DIR=\".\"
 
 # Objects
 BOOT_OBJS = main.o terminal.o dataslot.o misaligned.o start.o
@@ -90,7 +90,7 @@ $(TARGET).elf: $(ALL_OBJS) linker.ld
 	$(LD) $(LDFLAGS) -o $@ $(ALL_OBJS) $(LIBGCC)
 
 $(TARGET).mif: $(TARGET).elf
-	$(OBJCOPY) -O binary -j .boot -j .boot_data -j .boot_bss -j .fasttext -j .fastdata $< boot.bin
+	$(OBJCOPY) -O binary -j .boot -j .fasttext -j .fastdata $< boot.bin
 	@echo "WIDTH=32;" > $@
 	@echo "DEPTH=16384;" >> $@
 	@echo "ADDRESS_RADIX=DEC;" >> $@

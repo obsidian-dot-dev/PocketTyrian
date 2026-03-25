@@ -24,20 +24,23 @@
 
 #define SDRAM_BASE          0x10000000
 #define SDRAM_UNCACHED_BASE 0x50000000
+#define PSRAM_BASE          0x30000000
+#define SRAM_BASE           0x32000000
 
 /* Memory Layout */
 #define ROMFS_SDRAM_ADDR    0x11000000
 #define ROMFS_SLOT_ID       0
 #define ROMFS_TOTAL_SIZE    11487952
 
-#define ADDR_VGASCREEN      (SDRAM_BASE + 0x020000)
-#define ADDR_VGASCREEN2     (SDRAM_BASE + 0x040000)
-#define ADDR_GAMESCREEN     (SDRAM_BASE + 0x060000)
+#define ADDR_VGASCREEN      (PSRAM_BASE + 0x010000)
+#define ADDR_VGASCREEN2     (PSRAM_BASE + 0x020000)
+#define ADDR_GAMESCREEN     (SRAM_BASE)
 
 /* ============================================
  * Internal Platform Helpers
  * ============================================ */
 
+__attribute__((section(".fasttext")))
 static void flush_dcache(void) {
     for (int i = 0; i < 1024; i++) __asm__ volatile("fence");
 }
@@ -69,6 +72,7 @@ void update_hardware_palette(SDL_Color *pal) {
  * OpenTyrian Integration
  * ============================================ */
 
+__attribute__((section(".fasttext")))
 void JE_showVGA(void) {
     extern Palette palette;
     update_hardware_palette(palette);
@@ -118,7 +122,8 @@ extern void rom_fs_init(void);
 
 __attribute__((section(".text.entry")))
 void tyrian_main(void) {
-    term_clear();
+    register uint32_t sp asm("sp");
+    term_clear();  
     heap_init(_heap_start, _heap_end - _heap_start);
 
     /* Setup a nice loading box */
@@ -142,7 +147,10 @@ void tyrian_main(void) {
         "Mining data cubes...   ",
         "Compiling shaders...   ",
         "Hogging glory...       ",
-        "Preparing taxes...     "
+        "Preparing taxes...     ",
+        "Optimizing blit...     ",
+        "Calculating Pi...      ",
+        "Feeling Nostalgia...   ",
     };
 
     uint32_t done = 0;
@@ -164,7 +172,7 @@ void tyrian_main(void) {
             progress_steps = new_steps;
 
             /* Update random message every few steps */
-            if (progress_steps % 4 == 0) {
+            if (progress_steps % 2 == 0) {
                 term_setpos(7, 1);
                 term_printf("%s", fun_messages[msg_idx % 8]);
                 msg_idx++;

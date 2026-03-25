@@ -190,9 +190,10 @@ void *realloc(void *ptr, size_t size) {
 }
 
 /* ============================================
- * Memory operations
+ * Memory operations (Pinned to zero-wait-state BRAM)
  * ============================================ */
 
+__attribute__((section(".fasttext")))
 void *memcpy(void *dest, const void *src, size_t n) {
     uint8_t *d = (uint8_t *)dest;
     const uint8_t *s = (const uint8_t *)src;
@@ -202,12 +203,19 @@ void *memcpy(void *dest, const void *src, size_t n) {
         uint32_t *d32 = (uint32_t *)d;
         const uint32_t *s32 = (const uint32_t *)s;
 
-        /* Unroll loop for large blocks */
+        /* Aggressively unroll loop for large blocks (64 bytes / 16 words per iteration) */
+        while (n >= 64) {
+            d32[0] = s32[0];   d32[1] = s32[1];   d32[2] = s32[2];   d32[3] = s32[3];
+            d32[4] = s32[4];   d32[5] = s32[5];   d32[6] = s32[6];   d32[7] = s32[7];
+            d32[8] = s32[8];   d32[9] = s32[9];   d32[10] = s32[10]; d32[11] = s32[11];
+            d32[12] = s32[12]; d32[13] = s32[13]; d32[14] = s32[14]; d32[15] = s32[15];
+            d32 += 16;
+            s32 += 16;
+            n -= 64;
+        }
+
         while (n >= 16) {
-            d32[0] = s32[0];
-            d32[1] = s32[1];
-            d32[2] = s32[2];
-            d32[3] = s32[3];
+            d32[0] = s32[0]; d32[1] = s32[1]; d32[2] = s32[2]; d32[3] = s32[3];
             d32 += 4;
             s32 += 4;
             n -= 16;
@@ -231,6 +239,7 @@ void *memcpy(void *dest, const void *src, size_t n) {
     return dest;
 }
 
+__attribute__((section(".fasttext")))
 void *memset(void *s, int c, size_t n) {
     uint8_t *p = (uint8_t *)s;
     uint8_t val = (uint8_t)c;
@@ -240,12 +249,18 @@ void *memset(void *s, int c, size_t n) {
         uint32_t val32 = val | (val << 8) | (val << 16) | (val << 24);
         uint32_t *p32 = (uint32_t *)p;
 
-        /* Unroll loop for large blocks */
+        /* Aggressively unroll loop for large blocks (64 bytes / 16 words per iteration) */
+        while (n >= 64) {
+            p32[0] = val32;  p32[1] = val32;  p32[2] = val32;  p32[3] = val32;
+            p32[4] = val32;  p32[5] = val32;  p32[6] = val32;  p32[7] = val32;
+            p32[8] = val32;  p32[9] = val32;  p32[10] = val32; p32[11] = val32;
+            p32[12] = val32; p32[13] = val32; p32[14] = val32; p32[15] = val32;
+            p32 += 16;
+            n -= 64;
+        }
+
         while (n >= 16) {
-            p32[0] = val32;
-            p32[1] = val32;
-            p32[2] = val32;
-            p32[3] = val32;
+            p32[0] = val32; p32[1] = val32; p32[2] = val32; p32[3] = val32;
             p32 += 4;
             n -= 16;
         }
@@ -267,6 +282,7 @@ void *memset(void *s, int c, size_t n) {
     return s;
 }
 
+__attribute__((section(".fasttext")))
 void *memmove(void *dest, const void *src, size_t n) {
     uint8_t *d = (uint8_t *)dest;
     const uint8_t *s = (const uint8_t *)src;
@@ -288,13 +304,20 @@ void *memmove(void *dest, const void *src, size_t n) {
         uint32_t *d32 = (uint32_t *)d;
         const uint32_t *s32 = (const uint32_t *)s;
 
+        while (n >= 64) {
+            d32 -= 16;
+            s32 -= 16;
+            d32[15] = s32[15]; d32[14] = s32[14]; d32[13] = s32[13]; d32[12] = s32[12];
+            d32[11] = s32[11]; d32[10] = s32[10]; d32[9] = s32[9];   d32[8] = s32[8];
+            d32[7] = s32[7];   d32[6] = s32[6];   d32[5] = s32[5];   d32[4] = s32[4];
+            d32[3] = s32[3];   d32[2] = s32[2];   d32[1] = s32[1];   d32[0] = s32[0];
+            n -= 64;
+        }
+
         while (n >= 16) {
             d32 -= 4;
             s32 -= 4;
-            d32[3] = s32[3];
-            d32[2] = s32[2];
-            d32[1] = s32[1];
-            d32[0] = s32[0];
+            d32[3] = s32[3]; d32[2] = s32[2]; d32[1] = s32[1]; d32[0] = s32[0];
             n -= 16;
         }
 

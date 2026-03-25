@@ -25,8 +25,11 @@ SECTIONS {
     . = ALIGN(4);
     PROVIDE(__global_pointer$ = . + 0x800);
 
-    /* Bootloader code - in BRAM, runs at startup */
+    /* --- BRAM SECTIONS (Contiguous for MIF generation) --- */
+
+    /* Bootloader code & data */
     .boot : {
+        __boot_start = .;
         KEEP(*(.text.start))       /* Startup code first */
         *(.text.boot*)             /* Bootloader functions */
         *terminal.o(.text*)
@@ -38,11 +41,7 @@ SECTIONS {
         *dataslot.o(.rodata*)
         *main.o(.rodata*)
         *misaligned.o(.rodata*)
-        . = ALIGN(4);
-    } > BRAM
-
-    /* Bootloader data */
-    .boot_data : {
+        
         *(.data.boot*)
         *terminal.o(.data*)
         *dataslot.o(.data*)
@@ -56,8 +55,39 @@ SECTIONS {
         . = ALIGN(4);
     } > BRAM
 
-    /* Bootloader BSS */
-    .boot_bss : {
+    /* Hot code pinned in BRAM */
+    .fasttext : {
+        . = ALIGN(4);
+        __fasttext_start = .;
+        KEEP(*(.fasttext*))
+        KEEP(*(.fastrodata*))
+        . = ALIGN(4);
+        __fasttext_end = .;
+    } > BRAM
+
+    /* Hot data pinned in BRAM (Initialized) */
+    .fastdata : {
+        . = ALIGN(4);
+        __fastdata_start = .;
+        KEEP(*(.fastdata*))
+        . = ALIGN(4);
+        __fastdata_end = .;
+    } > BRAM
+
+    /* --- END OF INITIALIZED BRAM DATA --- */
+    __boot_image_end = .;
+
+    /* Hot zero-initialized data pinned in BRAM */
+    .fastbss (NOLOAD) : {
+        . = ALIGN(4);
+        __fastbss_start = .;
+        *(.fastbss*)
+        . = ALIGN(4);
+        __fastbss_end = .;
+    } > BRAM
+
+    /* Bootloader BSS (Not in MIF, must be cleared by start.S) */
+    .boot_bss (NOLOAD) : {
         . = ALIGN(4);
         __bss_start = .;
         *(.bss.boot*)
@@ -73,24 +103,6 @@ SECTIONS {
         *(COMMON.boot)
         . = ALIGN(4);
         __bss_end = .;
-    } > BRAM
-
-    /* Hot code/data pinned in BRAM for lower latency. */
-    .fasttext : {
-        . = ALIGN(4);
-        __fasttext_start = .;
-        KEEP(*(.fasttext*))
-        KEEP(*(.fastrodata*))
-        . = ALIGN(4);
-        __fasttext_end = .;
-    } > BRAM
-
-    .fastdata : {
-        . = ALIGN(4);
-        __fastdata_start = .;
-        KEEP(*(.fastdata*))
-        . = ALIGN(4);
-        __fastdata_end = .;
     } > BRAM
 
     /* === SDRAM sections === */
@@ -139,7 +151,7 @@ SECTIONS {
     __runtime_stack_bottom = __runtime_stack_top - __runtime_stack_size;
     __heap_end = __romfs_start;
 
-    __stack_top = ORIGIN(BRAM) + LENGTH(BRAM);
+    __stack_top = ORIGIN(BRAM) + LENGTH(BRAM) - 16;
 
     /* Provide symbols for C code */
     PROVIDE(_start_addr = ORIGIN(BRAM));
@@ -155,6 +167,6 @@ SECTIONS {
     PROVIDE(_doom_load_addr = __doom_load_addr);
     PROVIDE(_doom_copy_size = __doom_copy_size);
 
-    /* Keep at least 8 KB BRAM stack/trap headroom after hot sections. */
-    ASSERT(__fastdata_end <= (__stack_top - 8192), "BRAM overflow: insufficient stack headroom")
+    /* Keep at least 16 KB BRAM stack/trap headroom after all BRAM sections. */
+    ASSERT(__bss_end <= (__stack_top - 16384), "BRAM overflow: insufficient stack headroom")
 }

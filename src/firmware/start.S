@@ -31,17 +31,29 @@ _start:
     li t1, 0xDEAD0001
     sw t1, 0(t0)
 
-    /* Clear BSS section */
+    /* Clear BRAM BSS section */
     lui a0, %hi(_bss_start)
     addi a0, a0, %lo(_bss_start)
     lui a1, %hi(_bss_end)
     addi a1, a1, %lo(_bss_end)
-clear_bss:
+    clear_bss:
     bge a0, a1, done_bss
     sw zero, 0(a0)
     addi a0, a0, 4
     j clear_bss
-done_bss:
+    done_bss:
+
+    /* Clear BRAM FAST BSS section */
+    lui a0, %hi(__fastbss_start)
+    addi a0, a0, %lo(__fastbss_start)
+    lui a1, %hi(__fastbss_end)
+    addi a1, a1, %lo(__fastbss_end)
+    clear_fastbss:
+    bge a0, a1, done_fastbss
+    sw zero, 0(a0)
+    addi a0, a0, 4
+    j clear_fastbss
+    done_fastbss:
 
     /* Jump to main */
     jal ra, main
