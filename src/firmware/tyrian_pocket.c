@@ -27,14 +27,18 @@
 #define PSRAM_BASE          0x30000000
 #define SRAM_BASE           0x32000000
 
-/* Memory Layout */
+/* 
+ * Stable Memory Layout for Tyrian Engine
+ * Buffers are spaced 64KB apart in SDRAM.
+ */
+#define ADDR_VGASCREEN      (SDRAM_BASE + 0x000000)
+#define ADDR_VGASCREEN2     (SDRAM_BASE + 0x010000)
+#define ADDR_GAMESCREEN     (SDRAM_BASE + 0x020000)
+#define ADDR_VGASCREEN_REAL (SDRAM_BASE + 0x000000)
+
 #define ROMFS_SDRAM_ADDR    0x11000000
 #define ROMFS_SLOT_ID       0
 #define ROMFS_TOTAL_SIZE    11487952
-
-#define ADDR_VGASCREEN      (PSRAM_BASE + 0x010000)
-#define ADDR_VGASCREEN2     (PSRAM_BASE + 0x020000)
-#define ADDR_GAMESCREEN     (SRAM_BASE)
 
 /* ============================================
  * Internal Platform Helpers
@@ -77,22 +81,27 @@ void JE_showVGA(void) {
     extern Palette palette;
     update_hardware_palette(palette);
 
+    /* 1. Flush D-Cache to ensure pixels are in SDRAM */
+    flush_dcache();
+
+    /* 2. Wait for previous swap to complete (Synchronization) */
+    service_audio();
+    while (SYS_FB_SWAP) {
+        service_audio();
+    }
+
+    /* 3. Commit current VGAScreen to the hardware draw buffer */
     uint32_t hw_word_offset = SYS_FB_DRAW;
     uint8_t *hw_ptr = (uint8_t *)(SDRAM_UNCACHED_BASE + (hw_word_offset << 1));
 
     extern SDL_Surface *VGAScreen;
     if (VGAScreen && VGAScreen->pixels) {
+        /* This memcpy is now safe because we're synced with V-Sync via SYS_FB_SWAP */
         memcpy(hw_ptr, VGAScreen->pixels, 320 * 200);
     }
 
-    flush_dcache();
+    /* 4. Trigger the hardware flip */
     SYS_FB_SWAP = 1;
-
-    /* Service audio FIFO while waiting for vsync swap */
-    service_audio();
-    while (SYS_FB_SWAP) {
-        service_audio();
-    }
 }
 
 void init_pocket_video(void) {
@@ -174,7 +183,7 @@ void tyrian_main(void) {
             /* Update random message every few steps */
             if (progress_steps % 2 == 0) {
                 term_setpos(7, 1);
-                term_printf("%s", fun_messages[msg_idx % 8]);
+                term_printf("%s", fun_messages[msg_idx % 11]);
                 msg_idx++;
             }
         }
