@@ -447,11 +447,6 @@ always @(posedge clk or posedge reset) begin
                     m_sdram_arvalid <= 1;
                     m_sdram_araddr <= lsu_ar_addr;
                     m_sdram_arlen <= lsu_ar_len;
-                end else if (lsu_ar_addr[31:24] == 8'h32) begin
-                    target_mem <= TGT_LOCAL;
-                    m_local_arvalid <= 1;
-                    m_local_araddr <= lsu_ar_addr;
-                    m_local_arlen <= lsu_ar_len;
                 end else if (lsu_ar_addr[31:27] == 5'b00110) begin
                     target_mem <= TGT_PSRAM;
                     m_psram_arvalid <= 1;
@@ -478,8 +473,6 @@ always @(posedge clk or posedge reset) begin
                 // Determine target
                 if (lsu_aw_addr[31:26] == 6'b000100 || lsu_aw_addr[31:26] == 6'b010100)
                     target_mem <= TGT_SDRAM;
-                else if (lsu_aw_addr[31:24] == 8'h32)
-                    target_mem <= TGT_LOCAL;
                 else if (lsu_aw_addr[31:27] == 5'b00110)
                     target_mem <= TGT_PSRAM;
                 else
@@ -497,10 +490,6 @@ always @(posedge clk or posedge reset) begin
                         m_sdram_awvalid <= 1;
                         m_sdram_awaddr <= lsu_aw_addr;
                         m_sdram_awlen <= lsu_aw_len;
-                    end else if (lsu_aw_addr[31:24] == 8'h32) begin
-                        m_local_awvalid <= 1;
-                        m_local_awaddr <= lsu_aw_addr;
-                        m_local_awlen <= lsu_aw_len;
                     end else if (lsu_aw_addr[31:27] == 5'b00110) begin
                         m_psram_awvalid <= 1;
                         m_psram_awaddr <= lsu_aw_addr;
@@ -533,11 +522,6 @@ always @(posedge clk or posedge reset) begin
                     m_sdram_arvalid <= 1;
                     m_sdram_araddr <= fetch_ar_addr;
                     m_sdram_arlen <= fetch_ar_len;
-                end else if (fetch_ar_addr[31:24] == 8'h32) begin
-                    target_mem <= TGT_LOCAL;
-                    m_local_arvalid <= 1;
-                    m_local_araddr <= fetch_ar_addr;
-                    m_local_arlen <= fetch_ar_len;
                 end else if (fetch_ar_addr[31:27] == 5'b00110) begin
                     target_mem <= TGT_PSRAM;
                     m_psram_arvalid <= 1;
@@ -563,8 +547,6 @@ always @(posedge clk or posedge reset) begin
                 // Everything else → Local target
                 if (io_cmd_addr[31:26] == 6'b010100) begin
                     target_mem <= TGT_SDRAM;
-                end else if (io_cmd_addr[31:24] == 8'h32) begin
-                    target_mem <= TGT_LOCAL;
                 end else if (io_cmd_addr[31:27] == 5'b00110) begin
                     target_mem <= TGT_PSRAM;
                 end else begin
@@ -583,10 +565,6 @@ always @(posedge clk or posedge reset) begin
                         m_sdram_awvalid <= 1;
                         m_sdram_awaddr <= io_cmd_addr;
                         m_sdram_awlen <= 0;
-                    end else if (io_cmd_addr[31:24] == 8'h32) begin
-                        m_local_awvalid <= 1;
-                        m_local_awaddr <= io_cmd_addr;
-                        m_local_awlen <= 0;
                     end else if (io_cmd_addr[31:27] == 5'b00110) begin
                         m_psram_awvalid <= 1;
                         m_psram_awaddr <= io_cmd_addr;
@@ -606,10 +584,6 @@ always @(posedge clk or posedge reset) begin
                         m_sdram_arvalid <= 1;
                         m_sdram_araddr <= io_cmd_addr;
                         m_sdram_arlen <= 0;
-                    end else if (io_cmd_addr[31:24] == 8'h32) begin
-                        m_local_arvalid <= 1;
-                        m_local_araddr <= io_cmd_addr;
-                        m_local_arlen <= 0;
                     end else if (io_cmd_addr[31:27] == 5'b00110) begin
                         m_psram_arvalid <= 1;
                         m_psram_araddr <= io_cmd_addr;

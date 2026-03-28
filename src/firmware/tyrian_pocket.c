@@ -24,17 +24,14 @@
 
 #define SDRAM_BASE          0x10000000
 #define SDRAM_UNCACHED_BASE 0x50000000
-#define PSRAM_BASE          0x30000000
-#define SRAM_BASE           0x32000000
 
 /* 
  * Stable Memory Layout for Tyrian Engine
  * Buffers are spaced 64KB apart in SDRAM.
  */
-#define ADDR_VGASCREEN      (SDRAM_BASE + 0x000000)
-#define ADDR_VGASCREEN2     (SDRAM_BASE + 0x010000)
-#define ADDR_GAMESCREEN     (SDRAM_BASE + 0x020000)
-#define ADDR_VGASCREEN_REAL (SDRAM_BASE + 0x000000)
+#define ADDR_VGASCREEN      (SDRAM_BASE + 0x020000)
+#define ADDR_VGASCREEN2     (SDRAM_BASE + 0x040000)
+#define ADDR_GAMESCREEN     (SDRAM_BASE + 0x060000)
 
 #define ROMFS_SDRAM_ADDR    0x11000000
 #define ROMFS_SLOT_ID       0
@@ -81,27 +78,21 @@ void JE_showVGA(void) {
     extern Palette palette;
     update_hardware_palette(palette);
 
-    /* 1. Flush D-Cache to ensure pixels are in SDRAM */
-    flush_dcache();
-
-    /* 2. Wait for previous swap to complete (Synchronization) */
-    service_audio();
-    while (SYS_FB_SWAP) {
-        service_audio();
-    }
-
-    /* 3. Commit current VGAScreen to the hardware draw buffer */
     uint32_t hw_word_offset = SYS_FB_DRAW;
     uint8_t *hw_ptr = (uint8_t *)(SDRAM_UNCACHED_BASE + (hw_word_offset << 1));
 
     extern SDL_Surface *VGAScreen;
     if (VGAScreen && VGAScreen->pixels) {
-        /* This memcpy is now safe because we're synced with V-Sync via SYS_FB_SWAP */
         memcpy(hw_ptr, VGAScreen->pixels, 320 * 200);
     }
 
-    /* 4. Trigger the hardware flip */
+    flush_dcache();
     SYS_FB_SWAP = 1;
+
+    service_audio();
+    while (SYS_FB_SWAP) {
+        service_audio();
+    } 
 }
 
 void init_pocket_video(void) {

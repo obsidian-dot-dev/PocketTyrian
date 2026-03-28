@@ -9,8 +9,8 @@
             "description": "OpenTyrian on VexRiscv RISC-V CPU",
             "author": "obsidian",
             "url": "",
-            "version": "0.9.2",
-            "date_release": "2026-03-17"
+            "version": "0.9.3",
+            "date_release": "2026-03-28"
         },
         "framework": {
             "target_product": "Analogue Pocket",

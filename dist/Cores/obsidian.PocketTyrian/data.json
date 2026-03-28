@@ -7,7 +7,7 @@
                 "name": "firmware",
                 "filename": "tyrian.bin",
                 "required": true,
-                "parameters": 2,                
+                "parameters": 2,
                 "deferload": true
             },
             {
@@ -19,7 +19,7 @@
                 "deferload": true
             },
             {
-                "id": 5,
+                "id": 2,
                 "name": "save data",
                 "filename": "tyrian.sav",
                 "required": false,

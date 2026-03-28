@@ -64,42 +64,24 @@ static int addr_valid(unsigned int addr, unsigned int len) {
     return 0;
 }
 
-/* Read byte from memory using word-aligned access to avoid nested traps */
+/* Read byte from memory */
 __attribute__((section(".text.boot")))
 static inline unsigned char read_byte(unsigned int addr) {
-    unsigned int aligned_addr = addr & ~3;
-    unsigned int val;
-    __asm__ volatile("lw %0, 0(%1)" : "=r"(val) : "r"(aligned_addr));
-    int shift = (addr & 3) * 8;
-    return (val >> shift) & 0xFF;
+    return *(volatile unsigned char *)addr;
 }
 
-/* Write byte to memory using word-aligned access to avoid nested traps */
+/* Write byte to memory */
 __attribute__((section(".text.boot")))
 static inline void write_byte(unsigned int addr, unsigned char val) {
-    unsigned int aligned_addr = addr & ~3;
-    unsigned int word;
-    __asm__ volatile("lw %0, 0(%1)" : "=r"(word) : "r"(aligned_addr));
-    int shift = (addr & 3) * 8;
-    word = (word & ~(0xFF << shift)) | ((unsigned int)val << shift);
-    __asm__ volatile("sw %0, 0(%1)" : : "r"(word), "r"(aligned_addr));
+    *(volatile unsigned char *)addr = val;
 }
 
-/* Emulate load (supports LB, LBU, LH, LHU, LW) */
+/* Emulate misaligned load */
 __attribute__((section(".text.boot")))
 static unsigned int emulate_load(unsigned int addr, int funct3) {
     unsigned int val = 0;
 
     switch (funct3) {
-    case FUNCT3_LB:  /* Load byte (signed) */
-        val = read_byte(addr);
-        val = (int)(signed char)val;
-        break;
-
-    case FUNCT3_LBU: /* Load byte (unsigned) */
-        val = read_byte(addr);
-        break;
-
     case FUNCT3_LH:  /* Load halfword (signed) */
         val = read_byte(addr) | (read_byte(addr + 1) << 8);
         val = (int)(signed short)val;
@@ -120,14 +102,10 @@ static unsigned int emulate_load(unsigned int addr, int funct3) {
     return val;
 }
 
-/* Emulate store (supports SB, SH, SW) */
+/* Emulate misaligned store */
 __attribute__((section(".text.boot")))
 static void emulate_store(unsigned int addr, unsigned int val, int funct3) {
     switch (funct3) {
-    case FUNCT3_SB:  /* Store byte */
-        write_byte(addr, val & 0xFF);
-        break;
-
     case FUNCT3_SH:  /* Store halfword */
         write_byte(addr, val & 0xFF);
         write_byte(addr + 1, (val >> 8) & 0xFF);
@@ -266,15 +244,9 @@ void fatal_trap(trap_frame_t *frame) {
     /* Ensure terminal is visible for fatal diagnostics. */
     (*(volatile unsigned int *)0x4000000C) = 0;
 
-    trap_frame_t snap;
-    if (frame) {
-        snap = *frame;
-    } else {
-        /* Minimal frame for NULL case */
-        for(int i=0; i<32; i++) snap.regs[i] = 0xDEADBEEF;
-        snap.mcause = 0; snap.mepc = 0; snap.mtval = 0;
-    }
-    
+    /* term_printf can itself trap (misaligned access), so snapshot first.
+     * Nested traps reuse the same trap-frame slot at top of BRAM stack. */
+    trap_frame_t snap = *frame;
     unsigned int dbg_stage = pd_dbg_stage;
     unsigned int dbg_info = pd_dbg_info;
     unsigned int handled = misaligned_count;

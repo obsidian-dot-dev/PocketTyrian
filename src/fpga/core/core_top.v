@@ -562,44 +562,13 @@ psram_controller #(
     .cram_lb_n(cram1_lb_n)
 );
 
-// SRAM unused - Replaced with controller
-wire        cpu_sram_rd;
-wire        cpu_sram_wr;
-wire [21:0] cpu_sram_addr;
-wire [31:0] cpu_sram_wdata;
-wire [3:0]  cpu_sram_wstrb;
-wire [31:0] cpu_sram_rdata;
-wire        cpu_sram_busy;
-wire        cpu_sram_rdata_valid;
-
-wire [15:0] sram_dq_out;
-wire [15:0] sram_dq_in = sram_dq;
-wire        sram_dq_oe;
-
-assign sram_dq = sram_dq_oe ? sram_dq_out : 16'hZZZZ;
-
-sram_controller #(
-    .WAIT_CYCLES(6)
-) sram (
-    .clk(clk_cpu),
-    .reset_n(reset_n),
-    .word_rd(cpu_sram_rd),
-    .word_wr(cpu_sram_wr),
-    .word_addr(cpu_sram_addr),
-    .word_data(cpu_sram_wdata),
-    .word_wstrb(cpu_sram_wstrb),
-    .word_q(cpu_sram_rdata),
-    .word_busy(cpu_sram_busy),
-    .word_q_valid(cpu_sram_rdata_valid),
-    .sram_a(sram_a),
-    .sram_dq_out(sram_dq_out),
-    .sram_dq_in(sram_dq_in),
-    .sram_dq_oe(sram_dq_oe),
-    .sram_oe_n(sram_oe_n),
-    .sram_we_n(sram_we_n),
-    .sram_ub_n(sram_ub_n),
-    .sram_lb_n(sram_lb_n)
-);
+// SRAM unused
+assign sram_dq   = 16'hZZZZ;
+assign sram_a    = 17'h0;
+assign sram_oe_n = 1'b1;
+assign sram_we_n = 1'b1;
+assign sram_ub_n = 1'b1;
+assign sram_lb_n = 1'b1;
 
 assign dbg_tx = 1'bZ;
 assign user1 = 1'bZ;
@@ -1542,8 +1511,8 @@ assign cpu_psram_rdata_valid = cpu_on_bank0 ? psram_mux_rdata_valid : psram1_rda
 // skips readback entirely (no .sav file created).
 always @(posedge clk_74a) begin
     datatable_wren <= 1;
-    datatable_addr <= 5 * 2 + 1;    // slot index 5, size entry
-    datatable_data <= 32'h060000;   // 384KB = 6 × 64KB (matches data.json size_maximum)
+    datatable_addr <= 2 * 2 + 1;    // slot index 2 (ID 5), size entry
+    datatable_data <= 32'h010000;   // 64KB (matches data.json size_maximum)
 end
 
 core_bridge_cmd icb (
@@ -1821,16 +1790,7 @@ assign video_hs = vidout_hs;
         .opl_ack(opl_ack),
         .game_id(game_id_sync2),
         .shutdown_pending(shutdown_pending_cpu),
-        .shutdown_ack(shutdown_ack_cpu),
-        // SRAM word interface
-        .sram_rd(cpu_sram_rd),
-        .sram_wr(cpu_sram_wr),
-        .sram_addr(cpu_sram_addr),
-        .sram_wdata(cpu_sram_wdata),
-        .sram_wstrb(cpu_sram_wstrb),
-        .sram_rdata(cpu_sram_rdata),
-        .sram_busy(cpu_sram_busy),
-        .sram_rdata_valid(cpu_sram_rdata_valid)
+        .shutdown_ack(shutdown_ack_cpu)
     );
 
     // Slave → io_sdram pulse adapter + bridge direct SDRAM reads
