@@ -15,6 +15,9 @@ for details on the underlying core.
 *   **Save Support:** Persistent config, and storage for 10 saves.
 *   **Gamepad Support:** All inputs are mapped natively to the Pocket's face and shoulder buttons.
 *   **Analogizer Support:** Play on a legit CRT with the [Analogizer](https://analogizer-fpga.com/en)!
+*   **Custom Detail Mode:** Optimized default graphics effect-level for the Pocket hardware.
+*   **Cheat Menu:** Unlock Super Arcade Mode, bonus ships, infinite money, extra difficulties, invulnerability, and more!
+*   **Ship Smuggling:** Use all Arcade-mode bonus ships (along with their weapons) in the Full Game mode!
 
 ## Controls
 
